@@ -1,0 +1,16 @@
+{
+  "name": "collaborare-suite",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Shared Copilot knowledge relay for isolated Windows VMs",
+  "scripts": {
+    "test": "npm run test:extension && npm run test:dashboard && npm run test:integration",
+    "test:extension": "npm --prefix vscode-extension test",
+    "test:dashboard": "npm --prefix dashboard test",
+    "test:integration": "node --test test/integration.test.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "UNLICENSED"
+}

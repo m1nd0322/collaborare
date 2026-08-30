@@ -1,0 +1,8 @@
+.git/**
+.github/**
+.vscode/**
+test/**
+knowledge-database/**
+node_modules/**
+npm-debug.log*
+*.vsix

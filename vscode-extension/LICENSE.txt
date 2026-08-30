@@ -1,0 +1,7 @@
+Collaborare Internal Use License
+
+This software is provided for authorized internal evaluation and use only.
+Redistribution outside the authorized organization is prohibited unless the
+software owner grants prior written permission.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.

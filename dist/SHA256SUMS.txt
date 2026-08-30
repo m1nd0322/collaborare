@@ -1,0 +1,1 @@
+6fde425bed0e25d97b55c03ff34781123eab8da0d9190e20766f34ad9ba7b224  collaborare-0.1.0.vsix

@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#071015">
+    <meta name="color-scheme" content="dark">
+    <title>Knowledge Relay</title>
+    <link rel="stylesheet" href="/styles.css">
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <div class="console-shell">
+      <header class="command-bar">
+        <div class="brand-block">
+          <span class="brand-code">KB//LIVE</span>
+          <div>
+            <h1>Knowledge Relay</h1>
+            <p>공유 지식 대화 타임라인</p>
+          </div>
+        </div>
+
+        <div class="connection-block">
+          <div id="connection-indicator" class="connection-indicator" data-state="connecting" aria-live="polite">
+            <span class="connection-light" aria-hidden="true"></span>
+            <span id="connection-label">연결 준비 중</span>
+          </div>
+          <button id="retry-button" class="text-button" type="button" hidden>지금 다시 연결</button>
+        </div>
+
+        <dl class="scope-readout">
+          <div>
+            <dt>PROJECT</dt>
+            <dd id="project-name">확인 중</dd>
+          </div>
+          <div>
+            <dt>KNOWLEDGE</dt>
+            <dd id="knowledge-path">knowledge-database</dd>
+          </div>
+        </dl>
+      </header>
+
+      <section class="telemetry-strip" aria-label="대시보드 현황">
+        <div class="telemetry-cell">
+          <span class="telemetry-label">전체 기록</span>
+          <strong id="total-count">0</strong>
+        </div>
+        <div class="telemetry-cell telemetry-cell-accent">
+          <span class="telemetry-label">현재 표시</span>
+          <strong id="visible-count">0</strong>
+        </div>
+        <div class="telemetry-cell telemetry-time">
+          <span class="telemetry-label">마지막 갱신</span>
+          <time id="last-updated">아직 없음</time>
+        </div>
+        <div class="telemetry-cell telemetry-pulse" aria-hidden="true">
+          <span></span><span></span><span></span><span></span><span></span>
+        </div>
+      </section>
+
+      <main>
+        <section class="filter-console" aria-labelledby="filter-heading">
+          <div class="filter-title">
+            <span class="section-index">01</span>
+            <div>
+              <h2 id="filter-heading">Signal filter</h2>
+              <p>계정, 상태, 본문 신호를 조합해 기록을 좁힙니다.</p>
+            </div>
+          </div>
+
+          <div class="filter-grid">
+            <label class="search-field">
+              <span>본문 검색</span>
+              <input id="search-input" type="search" autocomplete="off" placeholder="질문, 응답, 모델, 파일명 검색">
+            </label>
+
+            <label>
+              <span>계정</span>
+              <select id="account-filter">
+                <option value="">전체 계정</option>
+              </select>
+            </label>
+
+            <label>
+              <span>상태</span>
+              <select id="status-filter">
+                <option value="">전체 상태</option>
+              </select>
+            </label>
+
+            <label>
+              <span>정렬</span>
+              <select id="sort-order">
+                <option value="newest">최신순</option>
+                <option value="oldest">오래된순</option>
+              </select>
+            </label>
+
+            <button id="reset-filters" class="reset-button" type="button">필터 초기화</button>
+          </div>
+        </section>
+
+        <div id="server-notice" class="server-notice" role="status" hidden></div>
+
+        <section class="feed-section" aria-labelledby="feed-heading">
+          <div class="feed-heading-row">
+            <div class="filter-title">
+              <span class="section-index">02</span>
+              <div>
+                <h2 id="feed-heading">Conversation stream</h2>
+                <p id="result-summary">대화 기록을 불러오는 중입니다.</p>
+              </div>
+            </div>
+            <span class="live-ruler" aria-hidden="true">POLL / DIFF / RELAY</span>
+          </div>
+
+          <ol id="conversation-list" class="timeline" aria-live="polite" aria-busy="true"></ol>
+
+          <div id="empty-state" class="empty-state" hidden>
+            <span class="empty-code">NO SIGNAL</span>
+            <h3>표시할 대화가 없습니다.</h3>
+            <p>필터를 초기화하거나 knowledge-database에 Markdown 기록이 추가될 때까지 기다려 주세요.</p>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <noscript>이 대시보드는 실시간 피드를 위해 JavaScript가 필요합니다.</noscript>
+
+    <template id="conversation-template">
+      <li class="transmission">
+        <div class="timeline-gutter" aria-hidden="true">
+          <span class="timeline-node"></span>
+          <span class="timeline-sequence" data-role="sequence"></span>
+        </div>
+
+        <article class="transmission-sheet">
+          <header class="transmission-header">
+            <div class="file-identity">
+              <span class="file-kicker">CONVERSATION FILE</span>
+              <h3 data-role="filename"></h3>
+              <span class="relative-path" data-role="relative-path"></span>
+            </div>
+            <div class="header-flags">
+              <span class="new-flag" data-role="new-flag" hidden>NEW</span>
+              <span class="status-flag" data-role="status"></span>
+            </div>
+          </header>
+
+          <div class="exchange-grid">
+            <section class="message-panel user-panel">
+              <header>
+                <span class="message-index">Q</span>
+                <div>
+                  <h4>User</h4>
+                  <time data-role="question-time"></time>
+                </div>
+              </header>
+              <div class="markdown-body" data-role="question"></div>
+            </section>
+
+            <section class="message-panel copilot-panel">
+              <header>
+                <span class="message-index">A</span>
+                <div>
+                  <h4>Copilot</h4>
+                  <time data-role="response-time"></time>
+                </div>
+              </header>
+              <div class="markdown-body" data-role="response"></div>
+            </section>
+          </div>
+
+          <footer class="metadata-strip">
+            <dl>
+              <div><dt>ACCOUNT</dt><dd data-role="account"></dd></div>
+              <div><dt>HOST</dt><dd data-role="machine"></dd></div>
+              <div><dt>MODEL</dt><dd data-role="model"></dd></div>
+              <div><dt>SIZE</dt><dd data-role="size"></dd></div>
+            </dl>
+          </footer>
+
+          <details class="parse-details" data-role="parse-details" hidden>
+            <summary>구조를 완전히 해석하지 못했습니다. 원문과 경고 보기</summary>
+            <ul data-role="warnings"></ul>
+            <pre data-role="raw-text"></pre>
+          </details>
+        </article>
+      </li>
+    </template>
+  </body>
+</html>

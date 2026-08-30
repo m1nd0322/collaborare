@@ -1,0 +1,183 @@
+{
+  "name": "collaborare",
+  "displayName": "Collaborare",
+  "description": "A shared, auditable Copilot Chat participant backed by project Markdown conversations.",
+  "version": "0.1.0",
+  "publisher": "collaborare",
+  "license": "SEE LICENSE IN LICENSE.txt",
+  "private": true,
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": [
+    "Chat"
+  ],
+  "keywords": [
+    "chat",
+    "copilot",
+    "knowledge",
+    "collaboration"
+  ],
+  "main": "./extension.js",
+  "extensionKind": [
+    "workspace"
+  ],
+  "activationEvents": [
+    "onChatParticipant:collaborare.collaborare",
+    "onCommand:collaborare.initializeKnowledgeDatabase",
+    "onCommand:collaborare.openKnowledgeDatabase",
+    "onCommand:collaborare.checkStatus",
+    "onCommand:collaborare.configureAccount",
+    "onCommand:collaborare.syncPendingLogs"
+  ],
+  "extensionPack": [
+    "GitHub.copilot-chat"
+  ],
+  "scripts": {
+    "test": "node --test"
+  },
+  "contributes": {
+    "chatParticipants": [
+      {
+        "id": "collaborare.collaborare",
+        "name": "collaborare",
+        "fullName": "Collaborare",
+        "description": "Ask Copilot with shared project conversation context",
+        "isSticky": true,
+        "commands": [
+          {
+            "name": "init",
+            "description": "Initialize the project knowledge database"
+          },
+          {
+            "name": "open",
+            "description": "Open the project knowledge database folder"
+          },
+          {
+            "name": "status",
+            "description": "Check the project knowledge database status"
+          },
+          {
+            "name": "account",
+            "description": "Select the GitHub Copilot account name for audit logs"
+          },
+          {
+            "name": "sync",
+            "description": "Retry locally queued conversation logs"
+          }
+        ]
+      }
+    ],
+    "commands": [
+      {
+        "command": "collaborare.initializeKnowledgeDatabase",
+        "title": "Initialize Knowledge Database",
+        "category": "Collaborare"
+      },
+      {
+        "command": "collaborare.openKnowledgeDatabase",
+        "title": "Open Knowledge Database Folder",
+        "category": "Collaborare"
+      },
+      {
+        "command": "collaborare.checkStatus",
+        "title": "Check Status",
+        "category": "Collaborare"
+      },
+      {
+        "command": "collaborare.configureAccount",
+        "title": "Configure Copilot Account Name",
+        "category": "Collaborare"
+      },
+      {
+        "command": "collaborare.syncPendingLogs",
+        "title": "Sync Pending Conversation Logs",
+        "category": "Collaborare"
+      }
+    ],
+    "configuration": {
+      "title": "Collaborare",
+      "properties": {
+        "collaborare.projectPath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine-overridable",
+          "description": "Project root. Relative paths are resolved from the first workspace folder. When empty, the first workspace folder is used."
+        },
+        "collaborare.knowledgeDirectory": {
+          "type": "string",
+          "default": "knowledge-database",
+          "scope": "resource",
+          "description": "Relative directory under the project root used for shared knowledge. Absolute paths and traversal segments are rejected."
+        },
+        "collaborare.accountName": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "ignoreSync": true,
+          "description": "GitHub Copilot account name written to audit logs. Stored only in this VM's user settings. When empty, Collaborare detects GitHub accounts and asks for a selection if needed."
+        },
+        "collaborare.maxKnowledgeFiles": {
+          "type": "integer",
+          "default": 500,
+          "minimum": 1,
+          "maximum": 5000,
+          "description": "Maximum number of Markdown files considered during one recursive knowledge scan."
+        },
+        "collaborare.maxContextChars": {
+          "type": "integer",
+          "default": 24000,
+          "minimum": 1000,
+          "maximum": 200000,
+          "description": "Maximum character budget shared by retrieved knowledge and participant history."
+        },
+        "collaborare.maxFileBytes": {
+          "type": "integer",
+          "default": 262144,
+          "minimum": 1024,
+          "maximum": 5242880,
+          "description": "Maximum UTF-8 byte size of an individual Markdown knowledge file."
+        },
+        "collaborare.maxKnowledgeBytes": {
+          "type": "integer",
+          "default": 33554432,
+          "minimum": 1048576,
+          "maximum": 536870912,
+          "description": "Maximum aggregate byte size loaded during one shared knowledge scan. An incomplete byte-limited scan blocks the model request."
+        },
+        "collaborare.topK": {
+          "type": "integer",
+          "default": 8,
+          "minimum": 1,
+          "maximum": 100,
+          "description": "Maximum number of relevant knowledge files added to a model request."
+        },
+        "collaborare.localSpoolEnabled": {
+          "type": "boolean",
+          "default": true,
+          "scope": "machine",
+          "ignoreSync": true,
+          "description": "Queue a conversation in VS Code local extension storage when the shared drive cannot publish it, then retry on the next request or sync command."
+        },
+        "collaborare.localSpoolMaxFiles": {
+          "type": "integer",
+          "default": 500,
+          "minimum": 1,
+          "maximum": 10000,
+          "scope": "machine",
+          "ignoreSync": true,
+          "description": "Maximum number of pending conversation logs retained in this VM."
+        },
+        "collaborare.localSpoolMaxBytes": {
+          "type": "integer",
+          "default": 33554432,
+          "minimum": 1048576,
+          "maximum": 536870912,
+          "scope": "machine",
+          "ignoreSync": true,
+          "description": "Maximum aggregate byte size of pending conversation logs retained in this VM."
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "name": "knowledge-conversation-dashboard",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Dependency-free local dashboard for knowledge-database conversations",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "UNLICENSED"
+}
