@@ -6,6 +6,9 @@ param()
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
+Add-Type -AssemblyName System.IO.Compression
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+
 function Assert-True {
     param(
         [Parameter(Mandatory = $true)][bool]$Condition,
@@ -43,6 +46,46 @@ function Write-Utf8WithoutBom {
         [Parameter(Mandatory = $true)][string]$Contents
     )
     [System.IO.File]::WriteAllText($Path, $Contents, [System.Text.UTF8Encoding]::new($false))
+}
+
+function New-TestVsixFromDirectory {
+    param(
+        [Parameter(Mandatory = $true)][string]$Source,
+        [Parameter(Mandatory = $true)][string]$Destination
+    )
+
+    $sourceRoot = (Resolve-Path -LiteralPath $Source).ProviderPath
+    $sourcePrefix = $sourceRoot
+    if (-not $sourcePrefix.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
+        $sourcePrefix += [System.IO.Path]::DirectorySeparatorChar
+    }
+
+    $archive = [System.IO.Compression.ZipFile]::Open(
+        $Destination,
+        [System.IO.Compression.ZipArchiveMode]::Create
+    )
+    try {
+        foreach ($sourceFile in @(Get-ChildItem -LiteralPath $sourceRoot -Recurse -File | Sort-Object FullName)) {
+            $entryName = $sourceFile.FullName.Substring($sourcePrefix.Length).Replace('\', '/')
+            $entry = $archive.CreateEntry($entryName)
+            $sourceStream = [System.IO.File]::OpenRead($sourceFile.FullName)
+            try {
+                $entryStream = $entry.Open()
+                try {
+                    $sourceStream.CopyTo($entryStream)
+                }
+                finally {
+                    $entryStream.Dispose()
+                }
+            }
+            finally {
+                $sourceStream.Dispose()
+            }
+        }
+    }
+    finally {
+        $archive.Dispose()
+    }
 }
 
 function Add-TestVsixEntries {
@@ -154,8 +197,6 @@ try {
         & (Join-Path $repositoryRoot 'scripts/Initialize-Project.ps1') -ProjectPath $linkedProjectPath
     }
 
-    Add-Type -AssemblyName System.IO.Compression
-    Add-Type -AssemblyName System.IO.Compression.FileSystem
     $copilotSource = Join-Path $temporaryRoot 'copilot-source'
     $copilotExtension = Join-Path $copilotSource 'extension'
     New-Item -ItemType Directory -Path $copilotExtension -Force | Out-Null
@@ -184,7 +225,7 @@ try {
 '@
     Write-Utf8WithoutBom -Path (Join-Path $copilotSource '[Content_Types].xml') -Contents $contentTypes
     $copilotVsix = Join-Path $temporaryRoot 'github.copilot-chat-9.9.9.vsix'
-    [System.IO.Compression.ZipFile]::CreateFromDirectory($copilotSource, $copilotVsix)
+    New-TestVsixFromDirectory -Source $copilotSource -Destination $copilotVsix
 
     $prerequisiteSource = Join-Path $temporaryRoot 'copilot-prerequisite-source'
     $prerequisiteExtension = Join-Path $prerequisiteSource 'extension'
@@ -206,7 +247,7 @@ try {
     Write-Utf8WithoutBom -Path (Join-Path $prerequisiteSource 'extension.vsixmanifest') -Contents $prerequisiteVsixManifest
     Copy-Item -LiteralPath (Join-Path $copilotSource '[Content_Types].xml') -Destination $prerequisiteSource
     $prerequisiteVsix = Join-Path $temporaryRoot 'github.copilot-1.2.3.vsix'
-    [System.IO.Compression.ZipFile]::CreateFromDirectory($prerequisiteSource, $prerequisiteVsix)
+    New-TestVsixFromDirectory -Source $prerequisiteSource -Destination $prerequisiteVsix
     $casePrerequisiteSource = Join-Path $temporaryRoot 'case-prerequisite-source'
     $casePrerequisiteExtension = Join-Path $casePrerequisiteSource 'extension'
     New-Item -ItemType Directory -Path $casePrerequisiteExtension -Force | Out-Null
@@ -227,7 +268,7 @@ try {
     Write-Utf8WithoutBom -Path (Join-Path $casePrerequisiteSource 'extension.vsixmanifest') -Contents $casePrerequisiteVsixManifest
     Copy-Item -LiteralPath (Join-Path $copilotSource '[Content_Types].xml') -Destination $casePrerequisiteSource
     $casePrerequisiteVsix = Join-Path $temporaryRoot 'github.copilot-1.2.3-RC.1.vsix'
-    [System.IO.Compression.ZipFile]::CreateFromDirectory($casePrerequisiteSource, $casePrerequisiteVsix)
+    New-TestVsixFromDirectory -Source $casePrerequisiteSource -Destination $casePrerequisiteVsix
     $transitivePrerequisitePackage = @{
         name = 'copilot'
         publisher = 'GitHub'
@@ -238,10 +279,7 @@ try {
         -Path (Join-Path $prerequisiteExtension 'package.json') `
         -Contents $transitivePrerequisitePackage
     $transitivePrerequisiteVsix = Join-Path $temporaryRoot 'github.copilot-with-transitive-1.2.3.vsix'
-    [System.IO.Compression.ZipFile]::CreateFromDirectory(
-        $prerequisiteSource,
-        $transitivePrerequisiteVsix
-    )
+    New-TestVsixFromDirectory -Source $prerequisiteSource -Destination $transitivePrerequisiteVsix
 
     $unsafeCopilotVsix = Join-Path $temporaryRoot 'unsafe-copilot.vsix'
     Copy-Item -LiteralPath $copilotVsix -Destination $unsafeCopilotVsix
