@@ -1,0 +1,9 @@
+{
+  "schema": "collaborare/build-info/v1",
+  "extensionVersion": "0.1.1",
+  "nodeVersion": "22.23.2",
+  "vsceVersion": "3.9.2",
+  "vsceMode": "pre-provisioned",
+  "artifact": "collaborare-0.1.1.vsix",
+  "artifactSha256": "23ca47c69276301e38ab28fc7ae40572303a3bf442385396ebb56d29631c7f27"
+}

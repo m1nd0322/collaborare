@@ -4,8 +4,8 @@ const fs = require('node:fs/promises');
 const http = require('node:http');
 const path = require('node:path');
 
-const { DEFAULTS } = require('./config');
-const { PollingScanner } = require('./scanner');
+const { DEFAULTS, readLoopbackHost } = require('./config');
+const { filesystemIdentity, PollingScanner } = require('./scanner');
 
 const PUBLIC_DIRECTORY = path.resolve(__dirname, '..', 'public');
 const STATIC_FILES = new Map([
@@ -37,6 +37,8 @@ function resolveRuntimeOptions(options) {
     throw new Error('A project or knowledge path is required');
   }
 
+  const host = readLoopbackHost(options.host === undefined ? DEFAULTS.host : options.host);
+
   const knowledgeName = basenamePortable(knowledgeRoot) || 'knowledge-database';
   const inferredProjectRoot = projectRoot
     || (knowledgeName.toLowerCase() === 'knowledge-database' ? path.dirname(knowledgeRoot) : null);
@@ -45,12 +47,12 @@ function resolveRuntimeOptions(options) {
     || 'Standalone';
 
   return {
-    projectRoot,
+    projectRoot: inferredProjectRoot,
     knowledgeRoot,
     projectName,
     knowledgeName,
     knowledgeLabel: `${projectName}/${knowledgeName}`,
-    host: options.host || DEFAULTS.host,
+    host,
     port: options.port ?? DEFAULTS.port,
     intervalMs: options.intervalMs ?? DEFAULTS.intervalMs,
     maxFileBytes: options.maxFileBytes ?? DEFAULTS.maxFileBytes,
@@ -151,33 +153,88 @@ function pathIsSameOrInside(rootPath, candidatePath) {
   );
 }
 
-async function assertRuntimePathSafety(options) {
-  if (!options.projectRoot) {
-    return null;
+async function assertNoLinkedPathComponents(rootPath, candidatePath) {
+  const resolvedRoot = path.resolve(rootPath);
+  const resolvedCandidate = path.resolve(candidatePath);
+  if (!pathIsSameOrInside(resolvedRoot, resolvedCandidate)) {
+    return;
   }
 
-  let projectStat;
-  try {
-    projectStat = await fs.stat(options.projectRoot);
-  } catch (error) {
-    if (error && error.code === 'ENOENT') {
-      throw new Error(`Project directory does not exist: ${options.projectRoot}`);
+  let currentPath = resolvedRoot;
+  const components = [currentPath];
+  for (const segment of path.relative(resolvedRoot, resolvedCandidate).split(path.sep).filter(Boolean)) {
+    currentPath = path.join(currentPath, segment);
+    components.push(currentPath);
+  }
+  for (const component of components) {
+    const stat = await fs.lstat(component);
+    if (stat.isSymbolicLink()) {
+      throw new Error(`The knowledge path cannot contain a symbolic link or junction: ${component}`);
     }
-    throw error;
   }
-  if (!projectStat.isDirectory()) {
-    throw new Error(`Project path is not a directory: ${options.projectRoot}`);
+}
+
+async function assertRuntimePathSafety(options) {
+  async function resolveExistingDirectory(directoryPath, label) {
+    let directoryStat;
+
+    try {
+      directoryStat = await fs.lstat(directoryPath, { bigint: true });
+    } catch (error) {
+      if (error && error.code === 'ENOENT') {
+        throw new Error(`${label} directory does not exist: ${directoryPath}`);
+      }
+      if (error && error.code === 'ENOTDIR') {
+        throw new Error(`${label} path is not a directory: ${directoryPath}`);
+      }
+      throw error;
+    }
+
+    if (!directoryStat.isDirectory() || directoryStat.isSymbolicLink()) {
+      if (directoryStat.isSymbolicLink()) {
+        throw new Error(`${label} directory cannot be a symbolic link or junction: ${directoryPath}`);
+      }
+      throw new Error(`${label} path is not a directory: ${directoryPath}`);
+    }
+
+    try {
+      const realPath = await fs.realpath(directoryPath);
+      const canonicalStat = await fs.stat(realPath, { bigint: true });
+      if (filesystemIdentity(directoryStat) !== filesystemIdentity(canonicalStat)) {
+        throw new Error(`${label} directory changed while its identity was being pinned: ${directoryPath}`);
+      }
+      return { identity: filesystemIdentity(directoryStat), realPath };
+    } catch (error) {
+      if (error && error.code === 'ENOENT') {
+        throw new Error(`${label} directory does not exist: ${directoryPath}`);
+      }
+      throw error;
+    }
   }
 
-  await fs.mkdir(options.knowledgeRoot, { recursive: true });
-  const [realProjectRoot, realKnowledgeRoot] = await Promise.all([
-    fs.realpath(options.projectRoot),
-    fs.realpath(options.knowledgeRoot),
-  ]);
-  if (!pathIsSameOrInside(realProjectRoot, realKnowledgeRoot)) {
+  if (options.projectRoot
+    && !pathIsSameOrInside(path.resolve(options.projectRoot), path.resolve(options.knowledgeRoot))) {
+    throw new Error('Knowledge path must be inside the configured project path');
+  }
+  const projectDirectory = options.projectRoot
+    ? await resolveExistingDirectory(options.projectRoot, 'Project')
+    : null;
+  const knowledgeDirectory = await resolveExistingDirectory(options.knowledgeRoot, 'Knowledge');
+  const realProjectRoot = projectDirectory && projectDirectory.realPath;
+  const realKnowledgeRoot = knowledgeDirectory.realPath;
+
+  if (options.projectRoot) {
+    await assertNoLinkedPathComponents(options.projectRoot, options.knowledgeRoot);
+  }
+  if (realProjectRoot && !pathIsSameOrInside(realProjectRoot, realKnowledgeRoot)) {
     throw new Error('Knowledge directory resolves outside the project through a symbolic link or junction');
   }
-  return realProjectRoot;
+  return {
+    knowledgeIdentity: knowledgeDirectory.identity,
+    projectIdentity: projectDirectory && projectDirectory.identity,
+    realKnowledgeRoot,
+    realProjectRoot,
+  };
 }
 
 function sortConversations(conversations) {
@@ -353,8 +410,44 @@ function createDashboardServer(inputOptions = {}) {
     response.once('close', cleanup);
   }
 
+  function requestHasAllowedAuthority(request) {
+    const address = server.address();
+    const port = address && typeof address === 'object' ? address.port : options.port;
+    const displayHost = options.host.includes(':') ? `[${options.host}]` : options.host;
+    const authority = `${displayHost}:${port}`;
+    const allowedAuthorities = new Set([authority.toLowerCase()]);
+    const allowedOrigins = new Set([`http://${authority}`.toLowerCase()]);
+    if (port === 80) {
+      allowedAuthorities.add(displayHost.toLowerCase());
+      allowedOrigins.add(`http://${displayHost}`.toLowerCase());
+    }
+
+    const hostHeader = String(request.headers.host || '').toLowerCase();
+    if (!allowedAuthorities.has(hostHeader)) {
+      return false;
+    }
+
+    const origin = request.headers.origin;
+    if (origin && !allowedOrigins.has(String(origin).toLowerCase())) {
+      return false;
+    }
+
+    const fetchSite = request.headers['sec-fetch-site'];
+    const normalizedFetchSite = fetchSite && String(fetchSite).toLowerCase();
+    return !normalizedFetchSite || normalizedFetchSite === 'same-origin' || normalizedFetchSite === 'none';
+  }
+
   async function handleRequest(request, response) {
     applySecurityHeaders(response);
+    if (!requestHasAllowedAuthority(request)) {
+      const isApi = String(request.url || '').startsWith('/api');
+      if (isApi) {
+        sendJson(request, response, 421, { error: 'Request authority is not allowed' });
+      } else {
+        sendText(request, response, 421, 'Request authority is not allowed');
+      }
+      return;
+    }
     const decodedPath = decodeRequestPath(request.url);
 
     if (decodedPath.error) {
@@ -442,9 +535,23 @@ function createDashboardServer(inputOptions = {}) {
     }
 
     startPromise = (async () => {
-      const realProjectRoot = await assertRuntimePathSafety(options);
+      const {
+        knowledgeIdentity,
+        projectIdentity,
+        realKnowledgeRoot,
+        realProjectRoot,
+      } = await assertRuntimePathSafety(options);
+      if (Object.hasOwn(scanner, 'canonicalRootPath')) {
+        scanner.canonicalRootPath = realKnowledgeRoot;
+      }
+      if (Object.hasOwn(scanner, 'rootIdentity')) {
+        scanner.rootIdentity = knowledgeIdentity;
+      }
       if (realProjectRoot && Object.hasOwn(scanner, 'canonicalBoundaryRoot')) {
         scanner.canonicalBoundaryRoot = realProjectRoot;
+      }
+      if (projectIdentity && Object.hasOwn(scanner, 'boundaryIdentity')) {
+        scanner.boundaryIdentity = projectIdentity;
       }
       await scanner.scanNow();
 

@@ -4,26 +4,29 @@ Windows VM의 Chrome에서 네트워크 프로젝트 폴더에 쌓이는 Copilot
 
 - Node.js built-in 모듈만 사용합니다.
 - 패키지 설치, CDN, 외부 폰트, telemetry가 없습니다.
-- 기본 bind 주소는 `127.0.0.1`이며 CORS를 열지 않습니다.
+- bind 주소는 numeric loopback인 `127.0.0.1` 또는 `::1`만 허용하며 CORS를 열지 않습니다.
 - Markdown 파싱에 실패한 파일도 파일명과 원문으로 표시합니다.
 
 ## Requirements
 
-- Node.js 18 이상
-- Windows VM의 최신 Chrome
+- 지원 중인 Node.js 22 LTS 이상
+- 조직이 승인한 Windows VM용 Chrome Enterprise
 - 실행 계정에서 접근 가능한 프로젝트 폴더 또는 네트워크 드라이브
 
 `npm install`은 필요하지 않습니다.
 
 ## Quick Start
 
-PowerShell 또는 명령 프롬프트에서 이 디렉터리로 이동한 후 실행합니다.
+제한망 운영에서는 저장소 root의 script로 승인 버전을 검증해 실행합니다.
 
 ```powershell
-node server.js --project "Z:\ProjectName"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Start-Dashboard.ps1 `
+  -ProjectPath "Z:\ProjectName" `
+  -ExpectedNodeVersion "<approved-version>" `
+  -ExpectedChromeVersion "<approved-version>"
 ```
 
-서버가 다음 폴더를 감시하며, 폴더가 없으면 생성합니다.
+서버가 다음 폴더를 감시합니다. 폴더가 없으면 생성하지 않고 startup에 실패하므로 먼저 `Initialize-Project.ps1` 또는 `@collaborare /init`으로 초기화해야 합니다.
 
 ```text
 Z:\ProjectName\knowledge-database
@@ -35,7 +38,7 @@ Chrome에서 다음 주소를 엽니다.
 http://127.0.0.1:43110
 ```
 
-저장소 루트의 `scripts\Start-Dashboard.ps1`을 사용하면 표준 설치 경로의 Chrome을 자동 실행하며, `-ChromePath`로 실행 파일을 직접 지정할 수도 있습니다.
+`Start-Dashboard.ps1`은 표준 설치 경로의 Chrome을 자동 실행하며, `-ChromePath`로 실행 파일을 직접 지정할 수도 있습니다. 이후의 `node server.js` 예시는 version pin을 우회하므로 진단 용도입니다.
 
 명시적인 knowledge 경로를 사용하려면 다음처럼 실행합니다. `--knowledge-path`가 지정되면 project에서 파생한 기본 경로보다 우선합니다.
 
@@ -43,13 +46,15 @@ http://127.0.0.1:43110
 node server.js --knowledge-path "Z:\ProjectName\knowledge-database"
 ```
 
+명시한 폴더명이 `knowledge-database`이면 상위 project도 보안 경계로 추론해 두 directory identity를 모두 고정합니다. 다른 이름의 standalone 폴더는 해당 knowledge root identity만 고정합니다.
+
 ## CLI Options
 
 | Option | Default | Description |
 | --- | --- | --- |
 | `--project <path>` | 없음 | 프로젝트 루트. `<path>/knowledge-database`를 감시합니다. |
 | `--knowledge-path <path>` | 없음 | 감시할 knowledge 폴더를 직접 지정합니다. |
-| `--host <host>` | `127.0.0.1` | HTTP bind 주소입니다. |
+| `--host <host>` | `127.0.0.1` | `127.0.0.1` 또는 `::1`만 허용합니다. |
 | `--port <port>` | `43110` | HTTP port입니다. |
 | `--interval <ms>` | `2000` | polling scan 주기입니다. |
 | `--max-file-bytes <bytes>` | `262144` | 개별 Markdown 크기 상한입니다. |
@@ -127,10 +132,12 @@ console.log("code fence도 안전하게 표시됩니다");
 
 각 scan은 knowledge 폴더 아래 `.md` 파일을 재귀적으로 찾습니다.
 
-- 이전 scan의 `mtime + ctime + size + file id` fingerprint가 같으면 다시 읽거나 파싱하지 않습니다.
+- 이전 scan의 `mtime + ctime + size + file id + link count` fingerprint가 같으면 다시 읽거나 파싱하지 않습니다.
 - 새 파일과 변경 파일은 `upsert`, 사라진 파일은 `delete`로 전송합니다.
 - 숨김 파일, `~`/`#` 임시 파일, `.tmp.md`, `.temp.md`, `.swp.md`, `.part.md` 등을 무시합니다.
+- Hard-link 게시 중인 multi-link Markdown은 읽지 않고 scan을 폐기하며, temp link 제거로 single-link commit된 다음 polling에서만 표시합니다.
 - 심볼릭 링크를 따라가지 않으며 실제 경로가 knowledge 폴더 밖으로 벗어나면 읽지 않습니다.
+- Startup에 확인한 project와 knowledge root의 canonical identity를 고정하며 어느 root든 다른 directory나 symlink/junction으로 교체되면 직전 snapshot을 유지하고 scan 오류를 표시합니다. Project 내부를 향하더라도 중간 symlink/junction을 거부하며 안정적인 filesystem identity tuple이 없으면 시작하지 않습니다.
 - 파일 크기 제한을 넘은 항목은 건너뛰고 SSE `error` 경고를 보냅니다.
 - 파일 수 제한을 넘은 scan은 폐기하고 직전 snapshot을 유지합니다. 따라서 부분 scan 때문에 정상 항목이 `delete` 처리되지 않습니다.
 - 전체 Markdown byte 상한을 넘은 scan도 폐기해 서버와 Chrome의 과도한 메모리 사용을 막습니다.
@@ -162,12 +169,13 @@ API와 SSE에는 knowledge 폴더의 절대 경로를 넣지 않습니다. 파�
 
 ## Security Notes
 
-- 기본 `127.0.0.1` bind를 유지하면 Windows VM 외부에서 접근할 수 없습니다.
-- 원격 접근이 꼭 필요할 때만 `--host`를 변경하고 폐쇄망 방화벽 정책을 별도로 적용하십시오.
+- `127.0.0.1` 또는 `::1`만 허용하므로 Windows VM 외부에서 접근할 수 없습니다.
+- 현재 버전에는 사용자 인증과 TLS가 없어 원격 bind를 지원하지 않습니다.
 - CORS 허용 헤더와 telemetry가 없습니다.
 - 정적 파일은 `index.html`, `styles.css`, `app.js`만 제공합니다.
 - URL의 encoded traversal과 Windows backslash traversal을 모두 거부합니다.
 - knowledge 원문 파일을 직접 내려받는 HTTP endpoint는 없습니다.
+- Dashboard는 multi-link publication을 숨기지만 SMB writer 권한 자체를 통제하지 않습니다. Publisher의 active temp unlink 권한과 hard-link ACL 한계는 [`../docs/DEPLOYMENT.md`](../docs/DEPLOYMENT.md)의 배포 경계를 따릅니다.
 
 ## Test
 

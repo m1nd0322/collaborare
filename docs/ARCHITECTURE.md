@@ -42,14 +42,14 @@ Z:\ProjectName\knowledge-database\conversations\
 
 공유 파일 하나에 여러 VM이 append하지 않습니다. 모든 대화가 독립된 UUID 파일이므로 일반적인 파일 잠금 경쟁과 lost update를 피합니다.
 
-저장은 같은 디렉터리에 임시 파일을 만들고 내용을 완전히 쓴 뒤 `rename`합니다. 스캐너는 임시 파일을 무시하므로 다른 VM과 대시보드는 완성된 기록만 읽습니다.
+저장은 같은 디렉터리에 임시 파일을 만들고 내용을 완전히 쓴 뒤 final 이름을 hard link create-if-absent로 생성합니다. 게시 검증이 끝난 후 임시 link를 제거하는 작업이 commit이며, 스캐너는 single-link Markdown만 읽으므로 다른 VM과 대시보드는 committed 기록만 봅니다.
 
 ## 대시보드 변경 감지
 
 Windows mapped drive와 SMB 공유에서는 `fs.watch` 이벤트가 누락되거나 중복될 수 있습니다. 대시보드는 기본 2초마다 다음 작업을 수행합니다.
 
 1. `.md` 파일 목록을 재귀 수집합니다.
-2. `mtime + ctime + size + file id` fingerprint가 바뀐 파일만 다시 읽습니다.
+2. `mtime + ctime + size + file id + link count` fingerprint가 바뀐 파일만 다시 읽습니다.
 3. 이전 snapshot과 비교해 `upsert`와 `delete`를 계산합니다.
 4. 연결된 Chrome에 Server-Sent Events로 변경만 전송합니다.
 5. 브라우저가 revision gap을 발견하면 전체 snapshot을 다시 가져옵니다.
@@ -63,7 +63,7 @@ Chat Participant API는 해당 participant가 받은 요청과 응답만 소유�
 - 감사·공유 대상 대화는 `@collaborare`를 사용합니다.
 - 기본 Copilot Chat에서 이미 발생한 대화는 자동 수집하지 않습니다.
 - 일반 Copilot 응답을 몰래 변경하거나 extension 내부 저장소를 역공학하지 않습니다.
-- participant는 사용자가 Chat model picker에서 선택한 `request.model`을 존중합니다.
+- participant는 사용자가 Chat model picker에서 선택한 `request.model`을 존중하되 vendor가 `copilot`인 모델만 허용합니다.
 
 ## 보안 경계
 
@@ -72,9 +72,14 @@ Chat Participant API는 해당 participant가 받은 요청과 응답만 소유�
 - 사용자 질문과 Copilot 응답에는 소스 코드, 비밀정보, 개인정보가 포함될 수 있으므로 `knowledge-database` ACL은 프로젝트 참여자에게만 부여해야 합니다.
 - 공유 Markdown은 악의적인 prompt를 포함할 수 있어 모델 문맥에서 untrusted reference로 격리합니다.
 - 대시보드는 사용자 Markdown을 `innerHTML`로 넣지 않고 DOM `textContent` 기반으로 렌더링합니다.
-- 대시보드는 기본 localhost, no CORS, no telemetry이며 절대 공유 경로를 API에 노출하지 않습니다.
+- 대시보드는 numeric loopback 전용, no CORS, no telemetry이며 절대 공유 경로를 API에 노출하지 않습니다.
 - 보존 기간, 삭제 승인, 감사 열람 권한은 회사 정보보호 정책으로 별도 결정해야 합니다.
-- 공유 게시 실패 시 활성화되는 로컬 spool은 VS Code extension storage에 질문과 응답을 평문으로 보관합니다. 정책상 허용되지 않으면 설정으로 비활성화해야 합니다. 기본적으로 500개와 전체 32 MiB 중 먼저 도달한 상한에서 추가 보관을 중단합니다.
+- 공유 게시 실패 시 canonical project/knowledge/conversations/UTC date identity를 모두 고정한 기록에만 활성화되는 로컬 spool은 VS Code extension storage에 질문과 응답을 평문으로 보관합니다. 정책상 허용되지 않으면 설정으로 비활성화해야 합니다. 기본적으로 500개와 전체 32 MiB 중 먼저 도달한 상한에서 추가 보관을 중단합니다.
+- 완전 air-gap에서는 GitHub 인증과 Copilot 모델 호출이 불가능하므로 전체 기능을 지원하지 않습니다. 지원 배포는 GitHub.com/GHE.com 형태, Copilot plan, client version과 활성 기능별 공식 인증·Copilot·editor 필수 경로를 proxy/allowlist로 허용한 제한망입니다. Collaborare code는 자체 outbound client를 추가하지 않으며 VS Code Authentication/Language Model API에 위임합니다.
+- 대시보드는 인증과 TLS가 없으므로 `127.0.0.1`과 `::1` 외 bind를 거부합니다.
+- 게시 과정은 project root부터 write target까지 reparse point를 거부하고 write directory와 열린 temporary/final file identity를 반복 검증합니다. 완전히 쓴 temporary file을 create-if-absent hard link로 게시하고 검증이 끝날 때까지 두 링크를 유지하므로 `nlink=2`가 in-progress 표식이 됩니다. 검증 완료 뒤 temporary link 제거가 마지막 commit 연산이며, writer와 scanner는 single-link가 되기 전 final을 성공 또는 readable record로 인정하지 않습니다. Link count도 scanner fingerprint에 포함되므로 scan 중 commit 상태 전환은 해당 scan을 폐기합니다. 게시 후 검증 실패로 열린 inode를 scrub하면 해당 inode identity를 복구 증거로 보존하지만 in-place overwrite는 하지 않습니다. 같은 0-byte single-link tombstone 또는 동일 inode의 엄격한 내부 publication-temp link만 남은 tombstone pair를 재확인한 뒤 새 UUID로 no-clobber 재게시합니다. Recovery는 경로 교체 경쟁을 피하도록 남은 temp link를 삭제하지 않습니다. 정상 commit에는 publisher가 자신의 active temp link를 삭제할 권한이 필요하며, hard link 이름들은 security descriptor를 공유하므로 일반 ACL만으로 같은 writer에게 temp unlink를 허용하면서 final 변경을 완전히 차단할 수 없습니다. 기존 directory나 inode를 수정할 수 있는 악성 participant까지 방어해야 하면 직접 SMB writer 대신 권한이 분리된 중앙 writer 또는 서명 저장소를 사용해야 합니다.
+- Local queue는 lexical 경로, canonical project/knowledge/conversations/UTC date filesystem identity, 필요할 때 scrubbed inode identity와 재게시 UUID를 함께 저장합니다. 경로가 다른 target으로 재매핑되면 자동 publish 대신 unmatched 상태로 유지하며, 안정적인 identity를 모두 고정할 수 없는 요청은 queue에 넣지 않습니다. Identity가 없던 0.1.0 legacy v1 항목은 자동 publish하지 않고, 사용자가 원래 경로임을 확인한 뒤 수동 `/sync` modal에서 승인한 정확한 레코드만 현재 identity를 포함한 v2로 원자 전환합니다.
+- Local queue lock은 VM suspend나 clock 변화만으로 stale 판단해 탈취하지 않습니다. 비정상 종료 뒤 남은 lock은 모든 관련 process가 종료됐음을 확인한 관리자가 수동 복구합니다. 공유 publication-temp tombstone은 pending recovery가 해소되기 전에 삭제하지 않습니다.
 
 ## 확장 한계와 다음 단계
 

@@ -4,11 +4,21 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { EventEmitter, once } = require('node:events');
 
+const { createDashboardServer } = require('../lib/core');
 const { startDashboard } = require('../server');
 const {
   createTestDirectory,
   removeTestDirectory,
 } = require('../test-support/helpers');
+
+test('programmatic server options reject non-loopback bind hosts', () => {
+  for (const host of ['0.0.0.0', '192.0.2.10']) {
+    assert.throws(
+      () => createDashboardServer({ knowledgePath: '/unused', host }),
+      /host must be one of: 127\.0\.0\.1, ::1/,
+    );
+  }
+});
 
 test('CLI runtime closes its listener and signal handlers on SIGTERM', async (t) => {
   const knowledgePath = await createTestDirectory('server-shutdown');

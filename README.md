@@ -12,17 +12,18 @@ Collaborare는 직원별 Windows VM의 GitHub Copilot 대화를 프로젝트 단
 
 1. [동작 방식](#동작-방식)
 2. [중요한 제품 경계](#중요한-제품-경계)
-3. [구성요소](#구성요소)
-4. [사전 요구사항](#사전-요구사항)
-5. [설치](#설치)
-6. [VS Code 설정](#vs-code-설정)
-7. [사용법](#사용법)
-8. [Chrome 대시보드](#chrome-대시보드)
-9. [저장 형식](#저장-형식)
-10. [다중 VM 운영](#다중-vm-운영)
-11. [문제 해결](#문제-해결)
-12. [보안 및 운영 주의사항](#보안-및-운영-주의사항)
-13. [개발 및 검증](#개발-및-검증)
+3. [제한망 지원 범위](#제한망-지원-범위)
+4. [구성요소](#구성요소)
+5. [사전 요구사항](#사전-요구사항)
+6. [설치](#설치)
+7. [VS Code 설정](#vs-code-설정)
+8. [사용법](#사용법)
+9. [Chrome 대시보드](#chrome-대시보드)
+10. [저장 형식](#저장-형식)
+11. [다중 VM 운영](#다중-vm-운영)
+12. [문제 해결](#문제-해결)
+13. [보안 및 운영 주의사항](#보안-및-운영-주의사항)
+14. [개발 및 검증](#개발-및-검증)
 
 ## 동작 방식
 
@@ -55,7 +56,7 @@ Z:\ProjectName\knowledge-database\conversations\
 7. 질문, 응답, 계정 귀속 정보, VM 이름, 시각, 모델, 상태를 UUID Markdown으로 게시합니다.
 8. 대시보드는 polling으로 변경을 감지하고 Chrome에 SSE `upsert` 또는 `delete` 이벤트를 전송합니다.
 
-읽기·경로 오류, knowledge 경로 누락, 프로젝트 경계 이탈, 전체 byte 상한 초과가 발생하면 모델을 호출하지 않습니다. `maxKnowledgeFiles` 이후 파일과 `maxFileBytes`를 초과한 개별 파일은 검색 대상에서 제외하고 나머지 문서로 요청을 계속합니다.
+읽기·경로 오류, knowledge 경로 누락, 프로젝트 경계 이탈, 전체 byte 상한 초과, Markdown 파일 수 상한 초과가 발생하면 모델을 호출하지 않습니다. `maxFileBytes`를 초과한 개별 파일만 검색 대상에서 제외하고 나머지 문서로 요청을 계속합니다.
 
 ## 중요한 제품 경계
 
@@ -69,6 +70,18 @@ VS Code 공개 API는 다른 확장이 기본 GitHub Copilot Chat의 모든 질�
 
 법적 부인방지 수준의 감사가 필요하면 회사 인증서 기반 서명이나 승인된 중앙 감사 수집기를 별도로 구성해야 합니다.
 
+## 제한망 지원 범위
+
+Collaborare의 전체 기능은 완전 air-gap에서 동작하지 않습니다. `@collaborare`는 VS Code Language Model API로 GitHub Copilot 클라우드 모델을 호출하므로 GitHub.com 또는 GHE.com 배포 형태, Copilot plan, 승인 client version과 활성 기능에 대해 배포 시점 공식 문서가 요구하는 인증·Copilot·editor 경로에 HTTPS로 연결되어야 합니다.
+
+| 환경 | 지원 범위 |
+| --- | --- |
+| 완전 air-gap | 기존 Markdown과 로컬 dashboard 열람만 가능. Copilot 질문·응답은 지원하지 않음 |
+| Copilot 제한망 | 해당 배포 형태와 기능의 공식 GitHub/Copilot/VS Code 필수 경로를 회사 proxy/allowlist로 허용하면 전체 기능 지원 |
+| 오프라인 설치 | Marketplace와 npm registry 없이 local installer와 VSIX로 설치 가능 |
+
+Collaborare runtime은 자체 outbound HTTP client나 외부 endpoint를 추가하지 않고 VS Code Authentication/Language Model API에 위임합니다. Host application인 VS Code와 Copilot의 공식 필수 통신은 별도이며, Marketplace, npm registry, dashboard CDN은 runtime에 필요하지 않습니다. 정확한 반입 BOM, proxy/custom CA, hash와 서명 기준은 [`docs/OFFLINE_BOM.md`](docs/OFFLINE_BOM.md)를 따르십시오.
+
 ## 구성요소
 
 | 구성요소 | 위치 | 역할 |
@@ -79,6 +92,7 @@ VS Code 공개 API는 다른 확장이 기본 GitHub Copilot Chat의 모든 질�
 | 배포 산출물 | `dist/` | 설치 가능한 VSIX와 SHA-256 checksum |
 | 설계 문서 | `docs/ARCHITECTURE.md` | 데이터 흐름, 동시성 모델, 공개 API와 보안 경계 |
 | 배포 문서 | `docs/DEPLOYMENT.md` | 폐쇄망 반입, ACL, 수용시험, 운영 절차 |
+| 오프라인 BOM | `docs/OFFLINE_BOM.md` | 승인 버전, 설치 매체, proxy/CA, hash·서명 검증 기준 |
 
 ## 사전 요구사항
 
@@ -86,12 +100,12 @@ VS Code 공개 API는 다른 확장이 기본 GitHub Copilot Chat의 모든 질�
 
 | 항목 | 요구사항 |
 | --- | --- |
-| 운영체제 | Windows PowerShell 5.1을 사용할 수 있는 Windows VM |
-| VS Code | 1.95 이상 |
-| Copilot | GitHub Copilot Chat 설치 및 Enterprise 계정 로그인 |
-| 네트워크 | Copilot 자체 통신에 필요한 회사 proxy 또는 allowlist 구성 |
+| 운영체제 | Windows PowerShell 5.1과 .NET Framework 4.7.2 이상을 사용할 수 있는 Windows VM |
+| VS Code | 1.97 이상 |
+| Copilot | 승인된 정확한 버전의 GitHub Copilot Chat과 dependency VSIX, Enterprise 계정 로그인 |
+| 네트워크 | 승인한 GitHub.com/GHE.com 배포 형태, Copilot plan, client와 기능에 필요한 회사 proxy/allowlist/custom CA 구성 |
 | 공유 저장소 | `Z:\ProjectName` 또는 UNC 프로젝트 경로에 대한 읽기·쓰기 권한 |
-| 대시보드 | Node.js 18 이상, 최신 Chrome |
+| 대시보드 | 지원 중인 Node.js 22 LTS 이상, 조직이 승인한 Chrome Enterprise |
 
 VS Code 확장만 사용할 VM에는 Node.js가 필요하지 않습니다. Node.js는 Chrome 대시보드를 실행하는 VM에만 필요합니다.
 
@@ -99,12 +113,12 @@ VS Code 확장만 사용할 VM에는 Node.js가 필요하지 않습니다. Node.
 
 | 항목 | 요구사항 |
 | --- | --- |
-| Node.js | 20 이상 |
+| Node.js | 지원 중인 22 LTS 이상 |
 | npm | 인터넷 또는 사내 npm mirror에서 `@vscode/vsce@3.9.2`와 의존성을 받을 수 있어야 함 |
 | PowerShell | Windows PowerShell 5.1 이상 |
 | 소스 위치 | 로컬 경로 또는 drive-letter 경로. UNC 현재 디렉터리에서는 `npx.cmd`를 실행하지 않음 |
 
-저장소의 `dist/collaborare-0.1.0.vsix`를 승인된 배포 산출물로 직접 사용하는 경우 별도 빌드는 필요하지 않습니다.
+저장소의 `dist/collaborare-0.1.1.vsix`를 승인된 배포 산출물로 직접 사용하는 경우 별도 빌드는 필요하지 않습니다.
 
 ## 설치
 
@@ -128,43 +142,86 @@ npm test
 VSIX를 생성합니다.
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Package-Extension.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Package-Extension.ps1 `
+  -ExpectedNodeVersion "<approved-version>"
 ```
 
 기본 산출물은 다음과 같습니다.
 
 ```text
-dist\collaborare-0.1.0.vsix
+dist\collaborare-0.1.1.vsix
+dist\BUILD-INFO.json
+dist\README.md
 dist\SHA256SUMS.txt
+dist\DEPLOYMENT-SHA256SUMS.txt
 ```
 
-스크립트는 `@vscode/vsce@3.9.2`를 정확히 사용합니다. 완전한 폐쇄망 빌드 환경에서는 해당 버전과 전체 의존성을 사내 mirror에 준비하거나 검증된 `vsce` 실행 파일을 `-VsceCommand`로 지정합니다.
+`BUILD-INFO.json`에는 사용한 Node.js, vsce mode/version, VSIX SHA-256이 기록됩니다.
+
+스크립트는 `@vscode/vsce@3.9.2`를 정확히 사용합니다. 인터넷이 차단된 빌드 환경에서는 해당 버전과 전체 의존성을 사내 mirror에 준비하거나 검증된 `vsce` 실행 파일을 `-VsceCommand`로 지정합니다. 직원 VM에서는 패키징 스크립트를 실행하지 않습니다.
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Package-Extension.ps1 `
+  -ExpectedNodeVersion "<approved-version>" `
   -VsceCommand "C:\Tools\vsce.cmd"
 ```
 
 ### 3. 배포 bundle 준비
 
-각 VM에 다음 파일과 폴더를 함께 전달합니다.
+배포 bundle root는 다음 구조를 사용합니다. `<version>`과 모든 외부 binary는 조직 승인 BOM의 정확한 값으로 치환합니다.
 
 ```text
-dist\collaborare-0.1.0.vsix
+README.md
+dist\collaborare-0.1.1.vsix
+dist\BUILD-INFO.json
+dist\README.md
 dist\SHA256SUMS.txt
-dashboard\
+dist\DEPLOYMENT-SHA256SUMS.txt
+dashboard\package.json
+dashboard\README.md
+dashboard\server.js
+dashboard\lib\*.js
+dashboard\public\index.html
+dashboard\public\styles.css
+dashboard\public\app.js
+docs\DEPLOYMENT.md
+docs\OFFLINE_BOM.md
 scripts\Initialize-Project.ps1
 scripts\Install-Collaborare.ps1
+scripts\New-DeploymentManifest.ps1
 scripts\Start-Dashboard.ps1
+scripts\Test-VsixArtifact.ps1
+scripts\Vsix-Validation.ps1
+extensions\github.copilot-chat-<version>.vsix
+extensions\<copilot-prerequisite>-<version>.vsix
+installers\<approved VS Code, Node.js, Chrome installers>
+certificates\<approved proxy CA>
+manifest\<organization-signed outer manifest>
 ```
 
-`SHA256SUMS.txt`는 VSIX만 검증합니다. dashboard와 PowerShell 스크립트는 조직의 서명된 배포 manifest나 승인된 배포 매체 hash로 별도 검증하십시오.
+`SHA256SUMS.txt`는 VSIX 하나를, `DEPLOYMENT-SHA256SUMS.txt`는 script가 정의한 Collaborare payload 파일을 검증합니다. 전체 bundle의 미등재 파일 거부와 외부 installer, Copilot VSIX, CA, 두 manifest 자체 검증은 조직이 서명한 outer manifest의 책임입니다. 반입한 `New-DeploymentManifest.ps1`을 실행하기 전에 outer manifest 또는 Authenticode로 해당 script를 먼저 신뢰해야 합니다.
+
+신뢰 확인 후 Collaborare payload 전체를 검증합니다.
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\New-DeploymentManifest.ps1 `
+  -ExpectedCollaborareVersion "0.1.1" `
+  -ExpectedNodeVersion "22.23.2" `
+  -Verify
+```
+
+VSIX 내부 runtime이 승인 source와 byte 단위로 일치하는지는 빌드 PC에서 확인합니다.
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Test-VsixArtifact.ps1 `
+  -VsixPath ".\dist\collaborare-0.1.1.vsix"
+```
 
 VSIX checksum 확인 예시:
 
 ```powershell
 $expected = (Get-Content .\dist\SHA256SUMS.txt -Raw).Split()[0].ToLowerInvariant()
-$actual = (Get-FileHash .\dist\collaborare-0.1.0.vsix -Algorithm SHA256).Hash.ToLowerInvariant()
+$actual = (Get-FileHash .\dist\collaborare-0.1.1.vsix -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($actual -ne $expected) { throw "VSIX checksum mismatch" }
 Write-Host "VSIX checksum verified: $actual"
 ```
@@ -190,7 +247,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Initialize-Pro
 
 1. `knowledge-database\conversations`를 생성합니다.
 2. knowledge 경로가 symbolic link 또는 junction인지 검사합니다.
-3. 임시 probe 파일을 생성·삭제해 실제 쓰기 권한을 확인합니다.
+3. 임시 하위 directory를 만들고 그 안에서 publication temp create, hard-link publish, read, temp unlink, final read, cleanup을 수행해 SMB 게시 전제조건을 확인합니다.
 
 ### 5. 각 VM에 VS Code 확장 설치
 
@@ -198,23 +255,56 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Initialize-Pro
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Install-Collaborare.ps1 `
-  -VsixPath ".\dist\collaborare-0.1.0.vsix" `
+  -VsixPath ".\dist\collaborare-0.1.1.vsix" `
+  -CopilotChatVsixPath ".\extensions\github.copilot-chat-<version>.vsix" `
+  -PrerequisiteVsixPath ".\extensions\github.copilot-<version>.vsix" `
+  -ExpectedPrerequisiteExtension "GitHub.copilot@<version>" `
+  -ExpectedCodeVersion "<approved-version>" `
+  -ExpectedCopilotChatVersion "<approved-version>" `
+  -ExpectedCollaborareVersion "0.1.1" `
   -ProjectPath "Z:\ProjectName" `
   -Force
 ```
 
-설치 스크립트는 PATH와 표준 사용자·시스템 설치 경로에서 `code.cmd`를 찾고, 설치 후 `collaborare.collaborare@<version>`이 실제 목록에 나타나는지 확인합니다.
+승인된 Copilot Chat VSIX와 각 dependency VSIX는 이미 같은 버전이 설치되어 있어도 반드시 전달하십시오. Chat 및 선행 VSIX의 `extensionDependencies`와 `extensionPack` 전체 closure에 대해 `-PrerequisiteVsixPath`와 `-ExpectedPrerequisiteExtension "publisher.one@<version>","publisher.two@<version>"`를 정확히 대응시킵니다. 설치 스크립트는 모든 archive의 package/container identity와 재귀 dependency graph를 CLI 실행 전에 검증하고 leaf-first 순서로 local VSIX를 강제 설치합니다. 모든 CLI 설치에 `--do-not-include-pack-dependencies`와 `--do-not-sync`를 적용하고 설치 전후 inventory에서 승인되지 않은 extension 변경을 거부합니다. 누락·추가·중복·version 불일치·cycle은 Marketplace 조회 전에 실패합니다.
+
+Windows PowerShell 5.1의 `powershell.exe -File`은 배열 인수를 바인딩하지 못합니다. prerequisite가 둘 이상이면 Windows PowerShell session을 연 뒤 splatting으로 script를 직접 호출합니다.
+
+```powershell
+$install = @{
+  VsixPath = ".\dist\collaborare-0.1.1.vsix"
+  CopilotChatVsixPath = ".\extensions\github.copilot-chat-<version>.vsix"
+  PrerequisiteVsixPath = @(
+    ".\extensions\publisher.one-<version>.vsix"
+    ".\extensions\publisher.two-<version>.vsix"
+  )
+  ExpectedPrerequisiteExtension = @(
+    "publisher.one@<version>"
+    "publisher.two@<version>"
+  )
+  ExpectedCodeVersion = "<approved-version>"
+  ExpectedCopilotChatVersion = "<approved-version>"
+  ExpectedCollaborareVersion = "0.1.1"
+  ProjectPath = "Z:\ProjectName"
+  Force = $true
+}
+& .\scripts\Install-Collaborare.ps1 @install
+```
 
 Portable VS Code처럼 별도 CLI를 사용하면 직접 지정합니다.
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Install-Collaborare.ps1 `
-  -VsixPath ".\dist\collaborare-0.1.0.vsix" `
+  -VsixPath ".\dist\collaborare-0.1.1.vsix" `
+  -CopilotChatVsixPath ".\extensions\github.copilot-chat-<version>.vsix" `
+  -ExpectedCodeVersion "<approved-version>" `
+  -ExpectedCopilotChatVersion "<approved-version>" `
+  -ExpectedCollaborareVersion "0.1.1" `
   -CodeCommand "D:\Apps\VSCode\bin\code.cmd" `
   -Force
 ```
 
-CLI를 사용할 수 없으면 VS Code에서 `Extensions: Install from VSIX...`를 실행해 `collaborare-0.1.0.vsix`를 선택합니다.
+CLI를 사용할 수 없으면 VS Code에서 `Extensions: Install from VSIX...`를 실행할 수 있지만 script의 ID·정확한 버전·선행 확장 검증을 우회합니다. 운영 배포에서는 승인된 별도 검증 증거가 없는 수동 설치를 사용하지 마십시오.
 
 설치 후 VS Code를 다시 시작하고 `Z:\ProjectName`을 folder 또는 workspace로 엽니다.
 
@@ -250,7 +340,7 @@ Get-AuthenticodeSignature .\scripts\Install-Collaborare.ps1
 | `collaborare.projectPath` | `""` | 프로젝트 root. 비어 있으면 첫 workspace folder를 사용합니다. 상대경로는 첫 workspace 기준입니다. |
 | `collaborare.knowledgeDirectory` | `knowledge-database` | 프로젝트 내부의 knowledge 상대경로입니다. 절대경로와 `..`는 거부됩니다. |
 | `collaborare.accountName` | `""` | 감사 로그에 기록할 계정명입니다. VM user setting에만 저장됩니다. |
-| `collaborare.maxKnowledgeFiles` | `500` | 한 요청에서 고려할 Markdown 파일 수 상한입니다. |
+| `collaborare.maxKnowledgeFiles` | `500` | 한 요청의 Markdown 파일 수 상한입니다. 초과하면 불완전한 문맥 전송을 막기 위해 모델 요청을 차단합니다. |
 | `collaborare.maxContextChars` | `24000` | 선택 지식과 participant history가 공유하는 문자 예산입니다. |
 | `collaborare.maxFileBytes` | `262144` | 개별 Markdown 파일 byte 상한입니다. |
 | `collaborare.maxKnowledgeBytes` | `33554432` | 한 scan에서 읽는 전체 Markdown byte 상한입니다. 초과 시 모델 요청을 차단합니다. |
@@ -318,11 +408,13 @@ VS Code Chat에서 다음처럼 질문합니다.
 Copilot 응답을 생성했지만 공유 Markdown 게시가 실패하면 확장은 다음 순서로 처리합니다.
 
 1. 같은 UUID로 공유 게시를 최대 3회 재시도합니다.
-2. 실패하면 `globalStorageUri/pending-conversations` 아래 VM 로컬 queue에 평문 JSON을 원자적으로 기록합니다.
+2. 당시 canonical project/knowledge/conversations/UTC date identity를 모두 고정한 요청이면 실패 기록을 `globalStorageUri/pending-conversations` 아래 VM 로컬 queue에 평문 JSON으로 원자 저장합니다. Identity를 고정하지 못했다면 다른 target으로 오게시하지 않도록 queue하지 않고 경고합니다.
 3. 다음 `@collaborare` 요청 또는 `/sync`에서 현재 프로젝트 항목을 다시 게시합니다.
 4. 이미 게시된 같은 UUID와 내용이면 성공한 것으로 처리해 중복 파일을 만들지 않습니다.
 
-자동 동기화와 `/sync`는 호출당 현재 프로젝트 기록을 최대 100개 처리합니다. 출력의 `remaining`이 0보다 크면 `/sync`를 반복하십시오.
+자동 동기화와 `/sync`는 호출당 현재 프로젝트 기록을 최대 100개 처리합니다. 출력의 `remaining`이 0보다 크면 `/sync`를 반복하십시오. `legacy awaiting review`는 자동 게시되지 않습니다.
+
+`Z:` 경로와 UNC 경로는 같은 share라도 local queue에서 서로 다른 configured path로 취급됩니다. Queue는 lexical 경로와 당시 canonical project/knowledge/conversations/UTC date filesystem identity를 함께 저장하며, 같은 lexical 경로가 다른 share나 directory로 재매핑되면 자동 게시하지 않고 `other configured paths`로 남깁니다. 경로 전환 전에 기존 경로로 `/sync`를 완료하십시오. 0.1.0의 legacy v1 항목은 identity가 없어 자동 동기화하지 않습니다. 기존 경로가 원래 target임을 관리자가 확인한 뒤 수동 `/sync`의 modal 경고에서 승인한 당시 레코드만 현재 identity를 포함한 v2로 원자 전환합니다.
 
 기본 queue 상한은 500개 또는 전체 32 MiB입니다. 둘 중 하나에 먼저 도달하면 추가 local 보관을 중단하고 Chat에 경고합니다. 로컬 평문 저장이 회사 정책상 허용되지 않으면 다음 설정을 사용합니다.
 
@@ -338,11 +430,13 @@ Copilot 응답을 생성했지만 공유 Markdown 게시가 실패하면 확장�
 
 ### 권장 실행 방법
 
-Node.js 18 이상이 설치된 VM에서 실행합니다.
+지원 중인 Node.js 22 LTS 이상이 설치된 VM에서 실행합니다.
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Start-Dashboard.ps1 `
-  -ProjectPath "Z:\ProjectName"
+  -ProjectPath "Z:\ProjectName" `
+  -ExpectedNodeVersion "<approved-version>" `
+  -ExpectedChromeVersion "<approved-version>"
 ```
 
 기본 주소는 `http://127.0.0.1:43110`이며 표준 설치 경로의 Chrome을 자동으로 엽니다.
@@ -353,7 +447,9 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Start-Dashboar
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Start-Dashboard.ps1 `
   -ProjectPath "Z:\ProjectName" `
   -Port 43111 `
-  -Interval 3000
+  -Interval 3000 `
+  -ExpectedNodeVersion "<approved-version>" `
+  -ExpectedChromeVersion "<approved-version>"
 ```
 
 Chrome 경로를 직접 지정할 수 있습니다.
@@ -361,7 +457,9 @@ Chrome 경로를 직접 지정할 수 있습니다.
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Start-Dashboard.ps1 `
   -ProjectPath "Z:\ProjectName" `
-  -ChromePath "D:\Apps\Chrome\chrome.exe"
+  -ChromePath "D:\Apps\Chrome\chrome.exe" `
+  -ExpectedNodeVersion "<approved-version>" `
+  -ExpectedChromeVersion "<approved-version>"
 ```
 
 브라우저 자동 실행이 금지된 환경에서는 `-NoBrowser`를 추가하고 표시된 URL을 직접 엽니다.
@@ -369,12 +467,17 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Start-Dashboar
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Start-Dashboard.ps1 `
   -ProjectPath "Z:\ProjectName" `
+  -ExpectedNodeVersion "<approved-version>" `
   -NoBrowser
 ```
+
+`-NoBrowser`는 Chrome을 실행·검증하지 않습니다. 사용자가 여는 Chrome의 정확한 버전은 조직의 software inventory로 별도 확인하십시오.
 
 서버를 종료할 때는 실행한 terminal에서 `Ctrl+C`를 누릅니다.
 
 ### Node 직접 실행
+
+직접 실행은 `Start-Dashboard.ps1`의 정확한 Node.js/Chrome 버전 검증을 우회하므로 진단 용도로만 사용합니다.
 
 ```powershell
 node .\dashboard\server.js --project "Z:\ProjectName"
@@ -392,7 +495,7 @@ node .\dashboard\server.js --project "\\fileserver\share\ProjectName"
 | --- | --- | --- |
 | `--project <path>` | 없음 | `<path>/knowledge-database`를 감시합니다. |
 | `--knowledge-path <path>` | 없음 | knowledge 경로를 직접 지정합니다. |
-| `--host <host>` | `127.0.0.1` | HTTP bind 주소입니다. |
+| `--host <host>` | `127.0.0.1` | `127.0.0.1` 또는 `::1`만 허용합니다. |
 | `--port <port>` | `43110` | HTTP port입니다. |
 | `--interval <ms>` | `2000` | polling 간격입니다. |
 | `--max-file-bytes <bytes>` | `262144` | 개별 Markdown 크기 상한입니다. |
@@ -401,7 +504,7 @@ node .\dashboard\server.js --project "\\fileserver\share\ProjectName"
 
 동일한 값은 `DASHBOARD_PROJECT`, `DASHBOARD_KNOWLEDGE_PATH`, `DASHBOARD_HOST`, `DASHBOARD_PORT`, `DASHBOARD_INTERVAL`, `DASHBOARD_MAX_FILE_BYTES`, `DASHBOARD_MAX_FILES`, `DASHBOARD_MAX_TOTAL_BYTES` 환경변수로도 지정할 수 있습니다.
 
-대시보드를 다른 VM에 공개하려면 `--host` 변경뿐 아니라 Windows Firewall, 인증, TLS 정책이 필요합니다. 현재 버전에는 HTTP/API/SSE 사용자 인증이 없으므로 localhost 기본 운영을 권장합니다. `127.0.0.1`도 Windows 사용자·프로세스 격리를 제공하지 않으므로 다중 사용자 VM에서는 OS 격리나 인증 proxy가 필요합니다.
+현재 버전은 인증과 TLS를 제공하지 않아 `127.0.0.1`과 `::1` 외 주소 bind를 거부합니다. 다른 VM에 공개하지 마십시오. loopback도 Windows 사용자·프로세스 격리를 제공하지 않으므로 다중 사용자 VM에서는 OS 계정·session 격리가 필요합니다.
 
 세부 CLI, API, scanner, UI 설명은 [`dashboard/README.md`](dashboard/README.md)를 참고하십시오.
 
@@ -448,7 +551,7 @@ response_chars: "2"
 
 `status`는 `complete`, `cancelled`, `error` 중 하나입니다. `question_chars`와 `response_chars`는 질문 안에 `## Copilot` 같은 구조용 heading이 들어 있어도 본문 경계를 정확히 복원하기 위해 사용합니다.
 
-각 VM은 기존 파일에 append하지 않고 새 UUID 파일을 만듭니다. 임시 파일을 완전히 쓰고 같은 디렉터리 안에서 rename하므로 scanner는 완성된 기록만 읽습니다.
+각 VM은 기존 파일에 append하지 않고 새 UUID 파일을 만듭니다. 임시 파일을 완전히 쓰고 같은 디렉터리에서 hard link create-if-absent로 게시하므로 다른 writer가 먼저 만든 UUID를 덮어쓰지 않습니다. Extension과 dashboard scanner는 single-link Markdown만 committed 상태로 읽으며, 게시 검증이 끝나고 writer가 자신의 active temp link를 제거하기 전 `nlink=2` 파일은 scan 전체를 무효화합니다. 게시 후 검증 실패로 열린 inode를 scrub한 경우에도 그 inode를 다시 덮어쓰지 않고, identity가 그대로인 0-byte single-link tombstone 또는 같은 inode의 엄격한 내부 publication-temp link만 남은 tombstone pair임을 확인한 뒤 새 UUID로 재게시합니다. 남은 temp link는 경로 교체 경쟁을 피하기 위해 recovery 중 삭제하지 않습니다.
 
 ## 다중 VM 운영
 
@@ -460,9 +563,11 @@ VM A와 VM B가 같은 `Z:\ProjectName`을 사용하면 별도 애플리케이�
 
 운영 권장사항:
 
-- conversation 파일은 append-only로 취급하고 직접 수정은 최소화합니다.
+- 게시된 conversation 파일은 immutable 운영 기록으로 취급하고 수정·삭제를 감시·감사합니다.
+- Publisher 실행 identity에는 자신의 publication temp를 생성·쓰기하고 final hard link를 만든 뒤 active temp link를 삭제할 권한이 필요합니다. 이 정상 commit unlink를 거부하는 ACL은 지원하지 않습니다.
+- 기존 날짜 directory의 rename·delete와 reparse point 생성 권한은 제한합니다. 다른 identity가 만든 temp나 tombstone은 pending recovery가 끝나기 전에 수정·삭제하지 않습니다.
 - 프로젝트 참여자에게만 knowledge 폴더 ACL을 부여합니다.
-- SMB 공유가 같은 디렉터리의 atomic rename을 지원하는지 수용시험에서 확인합니다.
+- SMB 공유가 같은 디렉터리의 hard-link create-if-absent와 publication-temp unlink를 지원하는지 수용시험에서 확인합니다.
 - 파일 수가 증가하면 보존 기간과 archive 정책을 먼저 적용합니다.
 - 기본 polling 2초가 공유 스토리지에 부담을 주면 간격을 늘립니다.
 
@@ -470,7 +575,7 @@ VM A와 VM B가 같은 `Z:\ProjectName`을 사용하면 별도 애플리케이�
 
 ### `@collaborare`가 표시되지 않음
 
-1. VS Code가 1.95 이상인지 확인합니다.
+1. VS Code가 1.97 이상인지 확인합니다.
 2. Extensions 화면에서 `Collaborare`가 enabled 상태인지 확인합니다.
 3. GitHub Copilot Chat이 설치·활성화되어 있는지 확인합니다.
 4. VS Code를 완전히 다시 시작합니다.
@@ -489,7 +594,7 @@ Get-ChildItem "Z:\ProjectName\knowledge-database" -Force
 
 ### knowledge database가 없다는 오류
 
-대화 요청은 누락된 공유 폴더를 자동으로 다시 만들지 않습니다. 네트워크 단절을 빈 database로 오인하지 않기 위한 동작입니다. 공유 드라이브 연결을 확인한 뒤 프로젝트를 명시적으로 초기화합니다.
+대화 요청은 누락된 공유 폴더를 자동으로 다시 만들지 않습니다. 네트워크 단절을 빈 database로 오인하지 않기 위한 동작입니다. 요청 시작부터 database가 없어 knowledge identity를 고정하지 못한 error audit은 다른 target으로 오게시하지 않도록 local queue에도 넣지 않습니다. 공유 드라이브 연결을 확인한 뒤 프로젝트를 명시적으로 초기화합니다.
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Initialize-Project.ps1 `
@@ -524,7 +629,9 @@ Windows mapped drive는 사용자와 로그인 session별입니다. drive를 매
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Start-Dashboard.ps1 `
-  -ProjectPath "\\fileserver\share\ProjectName"
+  -ProjectPath "\\fileserver\share\ProjectName" `
+  -ExpectedNodeVersion "<approved-version>" `
+  -ExpectedChromeVersion "<approved-version>"
 ```
 
 ### 대시보드가 갱신되지 않음
@@ -542,20 +649,28 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Start-Dashboar
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Start-Dashboard.ps1 `
   -ProjectPath "Z:\ProjectName" `
-  -Port 43111
+  -Port 43111 `
+  -ExpectedNodeVersion "<approved-version>" `
+  -ExpectedChromeVersion "<approved-version>"
 ```
 
 ## 보안 및 운영 주의사항
 
 - 질문과 응답에는 소스 코드, 비밀번호, token, 고객 개인정보가 포함될 수 있습니다.
 - `knowledge-database` ACL은 프로젝트 참여자에게만 부여하십시오.
+- Publisher 실행 identity에는 새 날짜 directory, publication temp, final hard link 생성과 자신의 active temp link 삭제 권한이 필요합니다. 실제 extension identity로 정상 게시 후 temp link가 남지 않는지 수용시험합니다.
+- Hard link의 temp와 final 이름은 같은 security descriptor를 공유하므로 일반 파일 ACL만으로 동일 writer에게 temp unlink를 허용하면서 final 수정·삭제를 완전히 금지할 수는 없습니다. 악성 또는 탈취된 참여자 identity까지 방어해야 하면 직접 SMB writer 대신 권한이 분리된 중앙 writer와 서명·감사 저장소를 사용합니다.
 - account token과 GitHub 인증 session은 저장하지 않습니다.
 - 공유 Markdown은 prompt injection을 포함할 수 있으므로 모델 prompt에서 untrusted reference로 격리합니다.
 - local spool은 질문과 응답을 VM 로컬 extension storage에 평문으로 저장합니다.
 - 대시보드는 사용자 Markdown을 `innerHTML`로 삽입하지 않고 DOM `textContent` 기반으로 렌더링합니다.
-- 대시보드는 기본 localhost, no CORS, no telemetry이며 knowledge 원문 다운로드 endpoint를 제공하지 않습니다.
+- 대시보드는 numeric loopback 전용, no CORS, no telemetry이며 knowledge 원문 다운로드 endpoint를 제공하지 않습니다.
+- 대시보드는 numeric loopback `Host`와 same-origin browser 요청만 허용해 DNS rebinding을 차단합니다.
 - 보존 기간, 삭제 승인, 감사 열람 권한, 퇴사자 ACL 회수는 회사 정보보호 정책으로 결정해야 합니다.
-- 한 VM의 대시보드를 네트워크에 공개하려면 현재 버전에 없는 인증과 TLS를 먼저 추가해야 합니다.
+- 한 VM의 대시보드를 네트워크에 공개하는 구성은 현재 버전에서 지원하지 않습니다.
+- 기존 공유 directory를 rename하거나 reparse point로 교체하거나 자신의 writer 권한으로 기존 inode를 변경할 수 있는 악의적 참여자까지 방어하는 부인방지 저장소는 아닙니다. 이 위협에는 권한이 분리된 중앙 writer와 서명된 감사 저장소가 필요합니다.
+- Project root부터 knowledge write target까지 기존 경로 요소에 symlink/junction이 있거나 filesystem이 안정적인 identity tuple을 제공하지 않으면 extension과 dashboard는 fail closed합니다.
+- 비정상 종료 뒤 local `.enqueue-lock`이 남으면 모든 관련 VS Code instance를 종료한 뒤에만 관리자가 lock을 제거합니다. 실행 중인 instance의 오래된 lock을 자동 탈취하지 않습니다. 공유 폴더의 0-byte publication-temp tombstone은 recovery가 읽기 전용 증거로 사용하므로 queue가 해소되기 전에 수동 삭제하지 않습니다.
 
 ## 개발 및 검증
 
@@ -578,10 +693,18 @@ npm run test:integration
 - VS Code 확장 unit/integration test
 - Markdown 직렬화·파싱 round-trip
 - knowledge 검색·크기 제한·경로 경계 검증
-- local pending queue 내구성·동시성·멱등성
-- dashboard scanner diff·SSE·HTTP 보안 header
+- local pending queue 내구성·동시성·멱등성·명시적 legacy migration
+- dashboard scanner diff·SSE·HTTP 보안 header·DNS rebinding 방어
+- runtime package·browser asset·script의 offline network invariant
+- VSIX source byte·Windows-safe archive path·container identity·재귀 dependency closure·exact-version 설치·배포 manifest smoke
 
-`npm test`는 현재 Node.js runtime에서 JavaScript suite를 실행합니다. 릴리스 시에는 Node.js 18 직접 실행, VSIX 압축·source byte 비교, PowerShell parser 검사를 별도로 수행합니다.
+PowerShell 배포 smoke는 생성된 `0.1.1` VSIX가 있는 상태에서 실행합니다.
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\test\powershell\deployment-smoke.ps1
+```
+
+`npm test`는 현재 Node.js runtime에서 JavaScript suite와 offline runtime invariant를 실행합니다. `.github/workflows/verify.yml`은 Node.js 22와 Windows PowerShell 5.1에서 committed artifact 검증, 배포 smoke, 재패키징을 반복합니다.
 
 실제 배포 전에는 Windows PowerShell 5.1, 회사 VS Code/Copilot Enterprise, 실제 `Z:` SMB 공유, Chrome 정책 환경에서 [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)의 수용시험을 수행하십시오.
 

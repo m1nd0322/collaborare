@@ -58,6 +58,30 @@ function isPathSameOrInside(rootPath, candidatePath) {
   return rootPath === candidatePath || isPathInside(rootPath, candidatePath);
 }
 
+function pathsAreEqual(left, right) {
+  const normalizedLeft = path.resolve(left);
+  const normalizedRight = path.resolve(right);
+  return process.platform === 'win32'
+    ? normalizedLeft.toLowerCase() === normalizedRight.toLowerCase()
+    : normalizedLeft === normalizedRight;
+}
+
+function filesystemIdentity(stat) {
+  function isStableValue(value) {
+    return typeof value === 'bigint'
+      ? value > 0n
+      : Number.isSafeInteger(value) && value > 0;
+  }
+  if (!stat || !isStableValue(stat.dev) || !isStableValue(stat.ino)) {
+    throw new Error('A stable filesystem identity is unavailable for the knowledge directory.');
+  }
+  return `${String(stat.dev || 0)}:${String(stat.ino || 0)}`;
+}
+
+function isSingleLink(stat) {
+  return stat && (stat.nlink === 1 || stat.nlink === 1n);
+}
+
 function isTemporaryName(name) {
   if (/^[.~#]/.test(name) || /[~#]$/.test(name)) {
     return true;
@@ -127,6 +151,9 @@ async function readFileLimited(filePath, maxFileBytes, expectedStat) {
       error.code = 'NOT_A_FILE';
       throw error;
     }
+    if (!isSingleLink(initialStat)) {
+      throw new ScanMutationError();
+    }
     if (expectedStat && fingerprint(initialStat) !== fingerprint(expectedStat)) {
       throw new ScanMutationError();
     }
@@ -160,7 +187,8 @@ async function readFileLimited(filePath, maxFileBytes, expectedStat) {
     }
 
     const finalStat = await handle.stat();
-    if (fingerprint(finalStat) !== fingerprint(initialStat)) {
+    if (!isSingleLink(finalStat)
+      || fingerprint(finalStat) !== fingerprint(initialStat)) {
       throw new ScanMutationError();
     }
     if (finalStat.size > maxFileBytes) {
@@ -178,7 +206,7 @@ async function readFileLimited(filePath, maxFileBytes, expectedStat) {
 }
 
 function fingerprint(stat) {
-  return `${stat.mtimeMs}:${stat.ctimeMs}:${stat.size}:${stat.dev || 0}:${stat.ino || 0}`;
+  return `${stat.mtimeMs}:${stat.ctimeMs}:${stat.size}:${stat.dev || 0}:${stat.ino || 0}:${stat.nlink || 0}`;
 }
 
 function diffSnapshots(previousSnapshot, snapshot) {
@@ -210,7 +238,10 @@ async function scanKnowledgeDirectory(options) {
     maxFiles,
     maxTotalBytes = Number.MAX_SAFE_INTEGER,
     boundaryRoot,
+    boundaryIdentity,
     canonicalBoundaryRoot,
+    canonicalRootPath,
+    rootIdentity,
   } = options;
 
   if (!rootPath) {
@@ -227,18 +258,46 @@ async function scanKnowledgeDirectory(options) {
   }
 
   const resolvedRoot = path.resolve(rootPath);
-  if (!canonicalBoundaryRoot) {
-    await fs.mkdir(resolvedRoot, { recursive: true });
-  }
   const realRoot = await fs.realpath(resolvedRoot);
-  const rootStat = await fs.stat(resolvedRoot);
   const realBoundaryRoot = canonicalBoundaryRoot
     ? path.resolve(canonicalBoundaryRoot)
     : boundaryRoot
       ? await fs.realpath(path.resolve(boundaryRoot))
       : null;
+  async function assertBoundaryIdentity() {
+    if (!boundaryIdentity) {
+      return;
+    }
+    if (!realBoundaryRoot) {
+      throw new TypeError('A boundary root is required with a boundary identity');
+    }
+    const [currentRealBoundary, boundaryStat] = await Promise.all([
+      fs.realpath(realBoundaryRoot),
+      fs.lstat(realBoundaryRoot, { bigint: true }),
+    ]);
+    if (!boundaryStat.isDirectory()
+      || boundaryStat.isSymbolicLink()
+      || !pathsAreEqual(currentRealBoundary, realBoundaryRoot)
+      || filesystemIdentity(boundaryStat) !== boundaryIdentity) {
+      throw new ScanMutationError();
+    }
+  }
+  await assertBoundaryIdentity();
   if (realBoundaryRoot && !isPathSameOrInside(realBoundaryRoot, realRoot)) {
     throw new PathBoundaryError();
+  }
+  const [rootStat, rootIdentityStat] = await Promise.all([
+    fs.lstat(resolvedRoot),
+    fs.lstat(resolvedRoot, { bigint: true }),
+  ]);
+  if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) {
+    throw new ScanMutationError();
+  }
+  if (canonicalRootPath && !pathsAreEqual(canonicalRootPath, realRoot)) {
+    throw new ScanMutationError();
+  }
+  if (rootIdentity && rootIdentity !== filesystemIdentity(rootIdentityStat)) {
+    throw new ScanMutationError();
   }
   const { files, ignoredFileCount } = await collectMarkdownFiles(resolvedRoot, maxFiles);
   const snapshot = new Map();
@@ -257,9 +316,16 @@ async function scanKnowledgeDirectory(options) {
       }
 
       const stat = await fs.lstat(filePath);
-      if (!stat.isFile() || stat.isSymbolicLink()) {
-        continue;
+      if (!stat.isFile() || stat.isSymbolicLink() || !isSingleLink(stat)) {
+        throw new ScanMutationError();
       }
+
+      const currentFingerprint = fingerprint(stat);
+      observedFiles.push({
+        filePath,
+        fingerprint: currentFingerprint,
+        realPath: realFilePath,
+      });
 
       if (stat.size > maxFileBytes) {
         warnings.push({
@@ -275,15 +341,9 @@ async function scanKnowledgeDirectory(options) {
         throw new ScanByteLimitError(maxTotalBytes);
       }
 
-      const currentFingerprint = fingerprint(stat);
       const previous = previousSnapshot.get(relativePath);
       if (previous && previous.fingerprint === currentFingerprint) {
         snapshot.set(relativePath, previous);
-        observedFiles.push({
-          filePath,
-          fingerprint: currentFingerprint,
-          realPath: realFilePath,
-        });
         continue;
       }
 
@@ -293,6 +353,7 @@ async function scanKnowledgeDirectory(options) {
       if (finalRealFilePath !== realFilePath
         || !finalPathStat.isFile()
         || finalPathStat.isSymbolicLink()
+        || !isSingleLink(finalPathStat)
         || fingerprint(finalPathStat) !== fingerprint(file.stat)
         || !isPathInside(realRoot, finalRealFilePath)
         || (realBoundaryRoot && !isPathInside(realBoundaryRoot, finalRealFilePath))) {
@@ -312,11 +373,6 @@ async function scanKnowledgeDirectory(options) {
       snapshot.set(relativePath, {
         fingerprint: finalFingerprint,
         conversation,
-      });
-      observedFiles.push({
-        filePath,
-        fingerprint: finalFingerprint,
-        realPath: finalRealFilePath,
       });
     } catch (error) {
       if (error && ['SCAN_BYTE_LIMIT_EXCEEDED', 'PATH_OUTSIDE_BOUNDARY', 'SCAN_NAMESPACE_CHANGED'].includes(error.code)) {
@@ -344,11 +400,24 @@ async function scanKnowledgeDirectory(options) {
   }
 
   try {
-    const [finalRealRoot, finalRootStat] = await Promise.all([
+    await assertBoundaryIdentity();
+    const [finalRealRoot, finalRootStat, finalRootIdentityStat] = await Promise.all([
       fs.realpath(resolvedRoot),
-      fs.stat(resolvedRoot),
+      fs.lstat(resolvedRoot),
+      fs.lstat(resolvedRoot, { bigint: true }),
     ]);
-    if (finalRealRoot !== realRoot || fingerprint(finalRootStat) !== fingerprint(rootStat)) {
+    if (!finalRootStat.isDirectory()
+      || finalRootStat.isSymbolicLink()
+      || !pathsAreEqual(finalRealRoot, realRoot)
+      || (canonicalRootPath && !pathsAreEqual(canonicalRootPath, finalRealRoot))
+      || (rootIdentity && rootIdentity !== filesystemIdentity(finalRootIdentityStat))
+      || fingerprint(finalRootStat) !== fingerprint(rootStat)) {
+      throw new ScanMutationError();
+    }
+    const finalCollection = await collectMarkdownFiles(resolvedRoot, maxFiles);
+    if (finalCollection.ignoredFileCount !== ignoredFileCount
+      || finalCollection.files.length !== files.length
+      || finalCollection.files.some((filePath, index) => filePath !== files[index])) {
       throw new ScanMutationError();
     }
     for (const observed of observedFiles) {
@@ -358,6 +427,7 @@ async function scanKnowledgeDirectory(options) {
       ]);
       if (!currentStat.isFile()
         || currentStat.isSymbolicLink()
+        || !isSingleLink(currentStat)
         || currentRealPath !== observed.realPath
         || !isPathInside(realRoot, currentRealPath)
         || (realBoundaryRoot && !isPathInside(realBoundaryRoot, currentRealPath))
@@ -391,7 +461,10 @@ class PollingScanner extends EventEmitter {
     this.maxFiles = options.maxFiles;
     this.maxTotalBytes = options.maxTotalBytes || Number.MAX_SAFE_INTEGER;
     this.boundaryRoot = options.boundaryRoot || null;
+    this.boundaryIdentity = options.boundaryIdentity || null;
     this.canonicalBoundaryRoot = options.canonicalBoundaryRoot || null;
+    this.canonicalRootPath = options.canonicalRootPath || null;
+    this.rootIdentity = options.rootIdentity || null;
     this.snapshot = new Map();
     this.timer = null;
     this.scanPromise = null;
@@ -425,7 +498,10 @@ class PollingScanner extends EventEmitter {
         maxFiles: this.maxFiles,
         maxTotalBytes: this.maxTotalBytes,
         boundaryRoot: this.boundaryRoot,
+        boundaryIdentity: this.boundaryIdentity,
         canonicalBoundaryRoot: this.canonicalBoundaryRoot,
+        canonicalRootPath: this.canonicalRootPath,
+        rootIdentity: this.rootIdentity,
       });
 
       this.snapshot = report.snapshot;
@@ -496,6 +572,7 @@ module.exports = {
   ScanByteLimitError,
   ScanLimitError,
   diffSnapshots,
+  filesystemIdentity,
   isTemporaryName,
   scanKnowledgeDirectory,
 };

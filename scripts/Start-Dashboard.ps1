@@ -1,6 +1,6 @@
 #Requires -Version 5.1
 
-[CmdletBinding()]
+[CmdletBinding(DefaultParameterSetName = 'Browser')]
 param(
     [Parameter(Mandatory = $true)]
     [string]$ProjectPath,
@@ -11,17 +11,30 @@ param(
     [ValidateRange(250, 3600000)]
     [int]$Interval = 2000,
 
+    [ValidateSet('127.0.0.1', '::1')]
     [string]$HostAddress = '127.0.0.1',
 
     [string]$NodeCommand = 'node',
 
+    [Parameter(ParameterSetName = 'Browser')]
     [string]$ChromePath,
 
+    [Parameter(Mandatory = $true)]
+    [string]$ExpectedNodeVersion,
+
+    [Parameter(Mandatory = $true, ParameterSetName = 'Browser')]
+    [string]$ExpectedChromeVersion,
+
+    [Parameter(Mandatory = $true, ParameterSetName = 'NoBrowser')]
     [switch]$NoBrowser
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+
+if (-not $NoBrowser -and [string]::IsNullOrWhiteSpace($ExpectedChromeVersion)) {
+    throw 'ExpectedChromeVersion is required unless -NoBrowser is enabled.'
+}
 
 if (-not (Test-Path -LiteralPath $ProjectPath -PathType Container)) {
     throw "Project directory does not exist: $ProjectPath"
@@ -29,18 +42,21 @@ if (-not (Test-Path -LiteralPath $ProjectPath -PathType Container)) {
 
 $node = Get-Command $NodeCommand -ErrorAction SilentlyContinue
 if (-not $node) {
-    throw "Node.js was not found: $NodeCommand. Install Node.js 18 or newer."
+    throw "Node.js was not found: $NodeCommand. Install an approved Node.js 22 or newer release."
 }
 
-$majorVersion = [int]((& $node.Source '--version').TrimStart('v').Split('.')[0])
-if ($majorVersion -lt 18) {
-    throw "Node.js 18 or newer is required; found version $majorVersion."
+$nodeVersion = (& $node.Source '--version').Trim()
+$majorVersion = [int]($nodeVersion.TrimStart('v').Split('.')[0])
+if ($majorVersion -lt 22) {
+    throw "Node.js 22 or newer is required; found $nodeVersion."
+}
+if ($ExpectedNodeVersion -and $nodeVersion.TrimStart('v') -cne $ExpectedNodeVersion.TrimStart('v')) {
+    throw "Node.js version mismatch. Expected $ExpectedNodeVersion, found $nodeVersion."
 }
 
 $project = (Resolve-Path -LiteralPath $ProjectPath).ProviderPath
 $server = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\dashboard\server.js')).ProviderPath
-$browserHost = if ($HostAddress -in @('0.0.0.0', '::')) { '127.0.0.1' } else { $HostAddress }
-$urlHost = if ($browserHost.Contains(':') -and -not $browserHost.StartsWith('[')) { "[$browserHost]" } else { $browserHost }
+$urlHost = if ($HostAddress.Contains(':') -and -not $HostAddress.StartsWith('[')) { "[$HostAddress]" } else { $HostAddress }
 $url = "http://${urlHost}:$Port"
 $browserJob = $null
 $chromeExecutable = $null
@@ -67,18 +83,23 @@ if (-not $NoBrowser) {
 }
 
 if (-not $NoBrowser) {
+    if (-not $chromeExecutable) {
+        throw 'Google Chrome was not found. Install the approved offline Chrome build, pass -ChromePath, or use -NoBrowser to start only the server.'
+    }
+    $chromeVersion = (Get-Item -LiteralPath $chromeExecutable).VersionInfo.ProductVersion
+    if (-not $chromeVersion) {
+        throw "Could not determine the Chrome version: $chromeExecutable"
+    }
+    if ($chromeVersion -cne $ExpectedChromeVersion) {
+        throw "Chrome version mismatch. Expected $ExpectedChromeVersion, found $chromeVersion."
+    }
     try {
         $browserJob = Start-Job -ScriptBlock {
             param($DashboardUrl, $BrowserExecutable)
             for ($attempt = 0; $attempt -lt 60; $attempt++) {
                 try {
                     Invoke-WebRequest -Uri "$DashboardUrl/api/health" -UseBasicParsing -TimeoutSec 1 | Out-Null
-                    if ($BrowserExecutable) {
-                        Start-Process -FilePath $BrowserExecutable -ArgumentList $DashboardUrl
-                    }
-                    else {
-                        Start-Process $DashboardUrl
-                    }
+                    Start-Process -FilePath $BrowserExecutable -ArgumentList $DashboardUrl
                     return
                 }
                 catch {
@@ -86,9 +107,6 @@ if (-not $NoBrowser) {
                 }
             }
         } -ArgumentList $url, $chromeExecutable
-        if (-not $chromeExecutable) {
-            Write-Warning 'Chrome was not found in a standard location. The Windows default browser will be used.'
-        }
     }
     catch {
         Write-Warning "Could not schedule the browser launch. Open $url manually."
@@ -97,6 +115,10 @@ if (-not $NoBrowser) {
 
 Write-Host "Starting Collaborare dashboard: $url"
 Write-Host "Project: $project"
+Write-Host "Node.js: $nodeVersion"
+if ($chromeExecutable) {
+    Write-Host "Chrome: $chromeVersion"
+}
 
 try {
     & $node.Source $server '--project' $project '--host' $HostAddress '--port' $Port '--interval' $Interval

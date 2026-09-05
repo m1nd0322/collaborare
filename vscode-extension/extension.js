@@ -1,14 +1,16 @@
 'use strict';
 
 const crypto = require('node:crypto');
-const { constants: fsConstants } = require('node:fs');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const vscode = require('vscode');
 
 const {
+  assertKnowledgeDatabaseReady,
   ensureKnowledgeDatabase,
+  filesystemIdentity,
+  isValidFilesystemIdentity,
   resolveKnowledgeRoot,
   saveConversation,
   scanMarkdownFiles
@@ -17,7 +19,8 @@ const { selectRelevantDocuments } = require('./src/retrieval');
 const { buildPrompt, fitKnowledgeDocuments, formatHistory } = require('./src/prompt');
 const {
   enqueuePendingConversation,
-  flushPendingConversations
+  flushPendingConversations,
+  listMatchingLegacyPendingConversations,
 } = require('./src/pending-queue');
 
 const PARTICIPANT_ID = 'collaborare.collaborare';
@@ -31,6 +34,8 @@ const DEFAULTS = {
   topK: 8
 };
 let pendingQueueRoot;
+const LEGACY_QUEUE_APPROVAL = 'Adopt and synchronize';
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 class UserFacingError extends Error {}
 
@@ -70,24 +75,10 @@ function resolveProjectRoot(configuredPath, workspaceFolder) {
   return path.resolve(workspacePath, configured);
 }
 
-async function getRuntimeSettings() {
+function getLexicalRuntimeSettings() {
   const configuration = vscode.workspace.getConfiguration('collaborare');
   const workspaceFolder = firstWorkspaceFolder();
   const projectRoot = resolveProjectRoot(configuration.get('projectPath', ''), workspaceFolder);
-
-  let projectStats;
-  try {
-    projectStats = await fs.stat(projectRoot);
-  } catch (error) {
-    if (error && error.code === 'ENOENT') {
-      throw new UserFacingError(`The configured project root does not exist: ${projectRoot}`);
-    }
-    throw error;
-  }
-  if (!projectStats.isDirectory()) {
-    throw new UserFacingError(`The configured project root is not a directory: ${projectRoot}`);
-  }
-  const canonicalProjectRoot = await fs.realpath(projectRoot);
 
   let knowledgeRoot;
   try {
@@ -105,7 +96,6 @@ async function getRuntimeSettings() {
 
   return {
     projectRoot,
-    canonicalProjectRoot,
     projectName: matchingWorkspace ? matchingWorkspace.name : path.basename(projectRoot) || projectRoot,
     knowledgeRoot,
     configuredAccount: String(configuration.get('accountName', '') || '').trim(),
@@ -118,6 +108,44 @@ async function getRuntimeSettings() {
     maxKnowledgeBytes: readBoundedInteger(configuration, 'maxKnowledgeBytes', 1048576, 536870912),
     topK: readBoundedInteger(configuration, 'topK', 1, 100)
   };
+}
+
+async function validateRuntimeSettings(runtime) {
+  let projectStats;
+  try {
+    projectStats = await fs.lstat(runtime.projectRoot, { bigint: true });
+  } catch (error) {
+    if (error && error.code === 'ENOENT') {
+      throw new UserFacingError(`The configured project root does not exist: ${runtime.projectRoot}`);
+    }
+    throw error;
+  }
+  if (!projectStats.isDirectory() || projectStats.isSymbolicLink()) {
+    throw new UserFacingError(`The configured project root is not a directory: ${runtime.projectRoot}`);
+  }
+
+  let canonicalProjectRoot;
+  try {
+    canonicalProjectRoot = await fs.realpath(runtime.projectRoot);
+  } catch (error) {
+    if (error && error.code === 'ENOENT') {
+      throw new UserFacingError(`The configured project root does not exist: ${runtime.projectRoot}`);
+    }
+    throw error;
+  }
+  const canonicalProjectStats = await fs.stat(canonicalProjectRoot, { bigint: true });
+  if (filesystemIdentity(projectStats) !== filesystemIdentity(canonicalProjectStats)) {
+    throw new UserFacingError('The configured project root changed while it was being validated.');
+  }
+  return {
+    ...runtime,
+    canonicalProjectRoot,
+    projectIdentity: filesystemIdentity(projectStats),
+  };
+}
+
+async function getValidatedRuntimeSettings() {
+  return validateRuntimeSettings(getLexicalRuntimeSettings());
 }
 
 function machineName() {
@@ -274,6 +302,17 @@ function isCopilotChatInstalled() {
   );
 }
 
+function assertCopilotModel(model) {
+  if (!model || typeof model.sendRequest !== 'function') {
+    throw new UserFacingError('No Copilot chat model is available for this request.');
+  }
+  if (typeof model.vendor !== 'string' || model.vendor.toLowerCase() !== 'copilot') {
+    throw new UserFacingError(
+      'The selected chat model is not a GitHub Copilot model. Shared project context was not sent.'
+    );
+  }
+}
+
 function modelName(model) {
   if (!model) {
     return 'unavailable';
@@ -332,34 +371,113 @@ function wait(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
-async function saveConversationWithRetry(runtime, conversation, id, attempts = 3) {
+async function saveConversationWithRetry(
+  runtime,
+  conversation,
+  id,
+  attempts = 3,
+  initialRecoveryIdentity,
+  initialRecoveryId,
+  allowUnidentifiedRecovery = false,
+) {
+  if (!runtime.canonicalDateRoot || !runtime.dateIdentity) {
+    throw new Error('The conversation date target was not pinned before publishing.');
+  }
   let lastError;
+  let recoveryIdentity = isValidFilesystemIdentity(initialRecoveryIdentity)
+    ? initialRecoveryIdentity
+    : undefined;
+  let recoveryId = recoveryIdentity && UUID_PATTERN.test(initialRecoveryId || '')
+    ? initialRecoveryId
+    : id;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     if (attempt > 0) {
       await wait(150 * (2 ** (attempt - 1)));
     }
     try {
       return await saveConversation(runtime.knowledgeRoot, conversation, {
-        id,
+        id: recoveryId,
         projectRoot: runtime.canonicalProjectRoot,
         projectRootIsCanonical: true,
-        requireExistingRoot: true
+        lexicalProjectRoot: runtime.projectRoot,
+        requireExistingRoot: true,
+        expectedProjectIdentity: runtime.projectIdentity,
+        expectedCanonicalKnowledgeRoot: runtime.canonicalKnowledgeRoot,
+        expectedKnowledgeIdentity: runtime.knowledgeIdentity,
+        expectedCanonicalConversationsRoot: runtime.canonicalConversationsRoot,
+        expectedConversationsIdentity: runtime.conversationsIdentity,
+        expectedCanonicalDateRoot: runtime.canonicalDateRoot,
+        expectedDateIdentity: runtime.dateIdentity,
+        ...(allowUnidentifiedRecovery ? { allowUnidentifiedRecovery: true } : {}),
+        ...(recoveryIdentity ? { recoveryIdentity } : {}),
       });
     } catch (error) {
       lastError = error;
+      if (error && isValidFilesystemIdentity(error.recoveryIdentity)) {
+        recoveryIdentity = error.recoveryIdentity;
+        if (UUID_PATTERN.test(error.recoveryId || '')) {
+          recoveryId = error.recoveryId;
+        }
+      }
+    }
+  }
+  if (recoveryIdentity
+    && lastError
+    && (lastError.recoveryIdentity !== recoveryIdentity || lastError.recoveryId !== recoveryId)) {
+    try {
+      lastError.recoveryIdentity = recoveryIdentity;
+      lastError.recoveryId = recoveryId;
+    } catch (_assignmentError) {
+      const wrapped = new Error(cleanErrorMessage(lastError));
+      wrapped.cause = lastError;
+      wrapped.recoveryIdentity = recoveryIdentity;
+      wrapped.recoveryId = recoveryId;
+      lastError = wrapped;
     }
   }
   throw lastError;
 }
 
-async function syncPendingForRuntime(runtime) {
+async function syncPendingForRuntime(runtime, options = {}) {
   if (!runtime.localSpoolEnabled || !pendingQueueRoot) {
-    return { considered: 0, synced: 0, failed: 0, remaining: 0 };
+    return { considered: 0, synced: 0, failed: 0, remaining: 0, unmatched: 0, legacy: 0 };
   }
   return flushPendingConversations(pendingQueueRoot, {
+    projectRoot: runtime.projectRoot,
     knowledgeRoot: runtime.knowledgeRoot,
+    canonicalProjectRoot: runtime.canonicalProjectRoot,
+    projectIdentity: runtime.projectIdentity,
+    canonicalKnowledgeRoot: runtime.canonicalKnowledgeRoot,
+    knowledgeIdentity: runtime.knowledgeIdentity,
+    canonicalConversationsRoot: runtime.canonicalConversationsRoot,
+    conversationsIdentity: runtime.conversationsIdentity,
+    approvedLegacyEntries: options.approvedLegacyEntries,
+    async pinDate(entry) {
+      return assertKnowledgeDatabaseReady(runtime.knowledgeRoot, runtime.canonicalProjectRoot, {
+        projectRootIsCanonical: true,
+        lexicalProjectRoot: runtime.projectRoot,
+        expectedProjectIdentity: runtime.projectIdentity,
+        expectedCanonicalKnowledgeRoot: runtime.canonicalKnowledgeRoot,
+        expectedKnowledgeIdentity: runtime.knowledgeIdentity,
+        expectedCanonicalConversationsRoot: runtime.canonicalConversationsRoot,
+        expectedConversationsIdentity: runtime.conversationsIdentity,
+        probeDate: entry.conversation.questionAt,
+      });
+    },
     async save(entry) {
-      await saveConversationWithRetry(runtime, entry.conversation, entry.id, 2);
+      await saveConversationWithRetry({
+        ...runtime,
+        projectRoot: entry.projectRoot,
+        canonicalProjectRoot: entry.canonicalProjectRoot,
+        projectIdentity: entry.projectIdentity,
+        knowledgeRoot: entry.knowledgeRoot,
+        canonicalKnowledgeRoot: entry.canonicalKnowledgeRoot,
+        knowledgeIdentity: entry.knowledgeIdentity,
+        canonicalConversationsRoot: entry.canonicalConversationsRoot,
+        conversationsIdentity: entry.conversationsIdentity,
+        canonicalDateRoot: entry.canonicalDateRoot,
+        dateIdentity: entry.dateIdentity,
+      }, entry.conversation, entry.id, 1, entry.recoveryIdentity, entry.recoveryId, true);
     }
   });
 }
@@ -375,12 +493,25 @@ async function handleConversation(request, chatContext, stream, token, questionA
   let result;
 
   try {
-    runtime = await getRuntimeSettings();
+    runtime = getLexicalRuntimeSettings();
     account = await resolveAccountName(runtime.configuredAccount, { interactive: true });
+    runtime = await validateRuntimeSettings(runtime);
 
     if (!question.trim()) {
       throw new UserFacingError('Enter a question after @collaborare.');
     }
+    if (!isCopilotChatInstalled()) {
+      throw new UserFacingError(
+        'GitHub Copilot Chat is not installed. Install or enable GitHub Copilot Chat, then retry @collaborare.'
+      );
+    }
+    assertCopilotModel(request.model);
+    const databaseIdentity = await assertKnowledgeDatabaseReady(runtime.knowledgeRoot, runtime.canonicalProjectRoot, {
+      projectRootIsCanonical: true,
+      lexicalProjectRoot: runtime.projectRoot,
+      expectedProjectIdentity: runtime.projectIdentity,
+    });
+    runtime = { ...runtime, ...databaseIdentity };
 
     stream.progress('Searching shared project knowledge...');
     let scan = await scanMarkdownFiles(runtime.knowledgeRoot, {
@@ -388,6 +519,9 @@ async function handleConversation(request, chatContext, stream, token, questionA
       maxFileBytes: runtime.maxFileBytes,
       maxTotalBytes: runtime.maxKnowledgeBytes,
       canonicalProjectRoot: runtime.canonicalProjectRoot,
+      expectedProjectIdentity: runtime.projectIdentity,
+      expectedCanonicalKnowledgeRoot: runtime.canonicalKnowledgeRoot,
+      expectedKnowledgeIdentity: runtime.knowledgeIdentity,
       isCancelled: () => token.isCancellationRequested
     });
 
@@ -400,12 +534,25 @@ async function handleConversation(request, chatContext, stream, token, questionA
         `Shared knowledge scan was incomplete (${scan.stats.failedFiles} read failure(s)). Check the Z: drive and file permissions before retrying.`
       );
     }
+    if (scan.stats.limitReached) {
+      throw new UserFacingError(
+        `Shared knowledge exceeds the ${runtime.maxKnowledgeFiles}-file scan limit. Archive old records or raise collaborare.maxKnowledgeFiles before retrying.`
+      );
+    }
     if (scan.stats.byteLimitReached) {
       throw new UserFacingError(
         `Shared knowledge exceeds the ${runtime.maxKnowledgeBytes}-byte scan limit. Archive old records or raise collaborare.maxKnowledgeBytes before retrying.`
       );
     }
     const pendingSync = await syncPendingForRuntime(runtime);
+    if (pendingSync.failed > 0
+      || pendingSync.remaining > 0
+      || pendingSync.unmatched > 0
+      || pendingSync.legacy > 0) {
+      stream.progress(
+        `Pending log sync incomplete: ${pendingSync.failed} failed, ${pendingSync.remaining} remaining for this path, ${pendingSync.unmatched} for other configured paths, ${pendingSync.legacy} legacy awaiting review.`
+      );
+    }
     if (pendingSync.synced > 0) {
       stream.progress(`Synchronized ${pendingSync.synced} pending conversation log(s).`);
       scan = await scanMarkdownFiles(runtime.knowledgeRoot, {
@@ -413,23 +560,18 @@ async function handleConversation(request, chatContext, stream, token, questionA
         maxFileBytes: runtime.maxFileBytes,
         maxTotalBytes: runtime.maxKnowledgeBytes,
         canonicalProjectRoot: runtime.canonicalProjectRoot,
+        expectedProjectIdentity: runtime.projectIdentity,
+        expectedCanonicalKnowledgeRoot: runtime.canonicalKnowledgeRoot,
+        expectedKnowledgeIdentity: runtime.knowledgeIdentity,
         isCancelled: () => token.isCancellationRequested
       });
       if (token.isCancellationRequested || scan.stats.cancelled) {
         status = 'cancelled';
         return { metadata: { status } };
       }
-      if (scan.stats.failedFiles > 0 || scan.stats.byteLimitReached) {
+      if (scan.stats.failedFiles > 0 || scan.stats.limitReached || scan.stats.byteLimitReached) {
         throw new UserFacingError('Shared knowledge changed or became unavailable while pending logs were synchronized. Retry the request.');
       }
-    }
-    if (!isCopilotChatInstalled()) {
-      throw new UserFacingError(
-        'GitHub Copilot Chat is not installed. Install or enable GitHub Copilot Chat, then retry @collaborare.'
-      );
-    }
-    if (!request.model || typeof request.model.sendRequest !== 'function') {
-      throw new UserFacingError('No Copilot chat model is available for this request.');
     }
 
     const historyBudget = Math.floor(runtime.maxContextChars * 0.3);
@@ -448,6 +590,17 @@ async function handleConversation(request, chatContext, stream, token, questionA
 
     const prompt = buildPrompt({ question, history, documents: selected });
     const messages = [vscode.LanguageModelChatMessage.User(prompt)];
+    const writeIdentity = await assertKnowledgeDatabaseReady(runtime.knowledgeRoot, runtime.canonicalProjectRoot, {
+      projectRootIsCanonical: true,
+      lexicalProjectRoot: runtime.projectRoot,
+      expectedProjectIdentity: runtime.projectIdentity,
+      expectedCanonicalKnowledgeRoot: runtime.canonicalKnowledgeRoot,
+      expectedCanonicalConversationsRoot: runtime.canonicalConversationsRoot,
+      expectedKnowledgeIdentity: runtime.knowledgeIdentity,
+      expectedConversationsIdentity: runtime.conversationsIdentity,
+      probeDate: questionAt,
+    });
+    runtime = { ...runtime, ...writeIdentity };
     const modelResponse = await request.model.sendRequest(messages, {}, token);
 
     for await (const fragment of modelResponse.text) {
@@ -476,41 +629,58 @@ async function handleConversation(request, chatContext, stream, token, questionA
   } finally {
     const responseAt = new Date().toISOString();
     if (runtime && account) {
+      const conversation = {
+        project: runtime.projectName,
+        account: account.name,
+        accountSource: account.source,
+        machine: machineName(),
+        questionAt,
+        responseAt,
+        model: modelName(request.model),
+        status,
+        question,
+        response: auditResponse(responseText, status, errorMessage)
+      };
       try {
-        const conversation = {
-          project: runtime.projectName,
-          account: account.name,
-          accountSource: account.source,
-          machine: machineName(),
-          questionAt,
-          responseAt,
-          model: modelName(request.model),
-          status,
-          question,
-          response: auditResponse(responseText, status, errorMessage)
-        };
+        if (!runtime.canonicalProjectRoot) {
+          throw new Error(errorMessage || 'The project root could not be validated for shared publishing.');
+        }
         await saveConversationWithRetry(runtime, conversation, conversationId);
       } catch (logError) {
         let queued = false;
         let warningError = logError;
-        if (runtime.localSpoolEnabled && pendingQueueRoot) {
+        if (runtime.localSpoolEnabled
+          && pendingQueueRoot
+          && runtime.canonicalProjectRoot
+          && runtime.projectIdentity
+          && runtime.canonicalKnowledgeRoot
+          && runtime.knowledgeIdentity
+          && runtime.canonicalConversationsRoot
+          && runtime.conversationsIdentity
+          && runtime.canonicalDateRoot
+          && runtime.dateIdentity) {
           try {
             await enqueuePendingConversation(pendingQueueRoot, {
               id: conversationId,
               projectRoot: runtime.projectRoot,
+              canonicalProjectRoot: runtime.canonicalProjectRoot,
+              projectIdentity: runtime.projectIdentity,
               knowledgeRoot: runtime.knowledgeRoot,
-              conversation: {
-                project: runtime.projectName,
-                account: account.name,
-                accountSource: account.source,
-                machine: machineName(),
-                questionAt,
-                responseAt,
-                model: modelName(request.model),
-                status,
-                question,
-                response: auditResponse(responseText, status, errorMessage)
-              }
+              canonicalKnowledgeRoot: runtime.canonicalKnowledgeRoot,
+              knowledgeIdentity: runtime.knowledgeIdentity,
+              canonicalConversationsRoot: runtime.canonicalConversationsRoot,
+              conversationsIdentity: runtime.conversationsIdentity,
+              canonicalDateRoot: runtime.canonicalDateRoot,
+              dateIdentity: runtime.dateIdentity,
+              ...(isValidFilesystemIdentity(logError.recoveryIdentity)
+                ? {
+                    recoveryIdentity: logError.recoveryIdentity,
+                    recoveryId: UUID_PATTERN.test(logError.recoveryId || '')
+                      ? logError.recoveryId
+                      : conversationId,
+                  }
+                : {}),
+              conversation
             }, {
               maxFiles: runtime.localSpoolMaxFiles,
               maxTotalBytes: runtime.localSpoolMaxBytes
@@ -535,30 +705,57 @@ function inlineCode(value) {
 }
 
 async function initializeDatabase() {
-  const runtime = await getRuntimeSettings();
+  const runtime = await getValidatedRuntimeSettings();
   await ensureKnowledgeDatabase(runtime.knowledgeRoot, runtime.canonicalProjectRoot, {
-    projectRootIsCanonical: true
+    projectRootIsCanonical: true,
+    lexicalProjectRoot: runtime.projectRoot,
   });
   return runtime;
 }
 
+async function getReadyRuntimeSettings(options = {}) {
+  const runtime = await getValidatedRuntimeSettings();
+  const databaseIdentity = await assertKnowledgeDatabaseReady(runtime.knowledgeRoot, runtime.canonicalProjectRoot, {
+    projectRootIsCanonical: true,
+    lexicalProjectRoot: runtime.projectRoot,
+    expectedProjectIdentity: runtime.projectIdentity,
+    probeDate: options.probeDate,
+  });
+  return { ...runtime, ...databaseIdentity };
+}
+
 async function syncPendingLogs() {
-  const runtime = await initializeDatabase();
-  const stats = await syncPendingForRuntime(runtime);
+  const runtime = await getReadyRuntimeSettings();
+  let approvedLegacyEntries = [];
+  if (runtime.localSpoolEnabled && pendingQueueRoot) {
+    const legacyEntries = await listMatchingLegacyPendingConversations(pendingQueueRoot, runtime);
+    if (legacyEntries.length > 0) {
+      const selected = await vscode.window.showWarningMessage(
+        `Collaborare found ${legacyEntries.length} legacy 0.1.0 pending log(s) without filesystem identity. Only continue if ${runtime.projectRoot} still refers to the original project and shared knowledge target.`,
+        { modal: true },
+        LEGACY_QUEUE_APPROVAL,
+      );
+      if (selected === LEGACY_QUEUE_APPROVAL) {
+        approvedLegacyEntries = legacyEntries;
+      }
+    }
+  }
+  const stats = await syncPendingForRuntime(runtime, { approvedLegacyEntries });
   return { runtime, stats };
 }
 
 async function statusReport() {
-  const runtime = await initializeDatabase();
+  const runtime = await getReadyRuntimeSettings({ probeDate: new Date().toISOString() });
   const account = await resolveAccountName(runtime.configuredAccount);
   const scan = await scanMarkdownFiles(runtime.knowledgeRoot, {
     maxFiles: runtime.maxKnowledgeFiles,
     maxFileBytes: runtime.maxFileBytes,
     maxTotalBytes: runtime.maxKnowledgeBytes,
-    canonicalProjectRoot: runtime.canonicalProjectRoot
+    canonicalProjectRoot: runtime.canonicalProjectRoot,
+    expectedProjectIdentity: runtime.projectIdentity,
+    expectedCanonicalKnowledgeRoot: runtime.canonicalKnowledgeRoot,
+    expectedKnowledgeIdentity: runtime.knowledgeIdentity,
   });
-  await fs.access(runtime.knowledgeRoot, fsConstants.R_OK | fsConstants.W_OK);
-
   return {
     runtime,
     account,
@@ -592,7 +789,7 @@ async function handleSlashCommand(command, stream) {
       return { metadata: { command, status: 'complete' } };
     }
     if (command === 'open') {
-      const runtime = await initializeDatabase();
+      const runtime = await getReadyRuntimeSettings();
       await vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(runtime.knowledgeRoot));
       stream.markdown(`Opened ${inlineCode(runtime.knowledgeRoot)}.`);
       return { metadata: { command, status: 'complete' } };
@@ -609,9 +806,9 @@ async function handleSlashCommand(command, stream) {
     if (command === 'sync') {
       const { stats } = await syncPendingLogs();
       stream.markdown(
-        `Pending log sync finished: ${stats.synced} synchronized, ${stats.failed} failed, ${stats.remaining} remaining.`
+        `Pending log sync finished: ${stats.synced} synchronized, ${stats.failed} failed, ${stats.remaining} remaining for this path, ${stats.unmatched} for other configured paths, ${stats.legacy} legacy awaiting review.`
       );
-      return { metadata: { command, status: stats.failed > 0 ? 'error' : 'complete' } };
+      return { metadata: { command, status: stats.failed > 0 || stats.legacy > 0 ? 'error' : 'complete' } };
     }
     throw new UserFacingError(`Unknown Collaborare command: /${command}`);
   } catch (error) {
@@ -652,7 +849,7 @@ function activate(context) {
     ),
     vscode.commands.registerCommand('collaborare.openKnowledgeDatabase', () =>
       runCommand(async () => {
-        const runtime = await initializeDatabase();
+        const runtime = await getReadyRuntimeSettings();
         await vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(runtime.knowledgeRoot));
         return runtime;
       }, (runtime) => `Knowledge database opened: ${runtime.knowledgeRoot}`)
@@ -667,7 +864,7 @@ function activate(context) {
     ),
     vscode.commands.registerCommand('collaborare.syncPendingLogs', () =>
       runCommand(syncPendingLogs, ({ stats }) =>
-        `Collaborare pending logs: ${stats.synced} synchronized, ${stats.failed} failed, ${stats.remaining} remaining`
+        `Collaborare pending logs: ${stats.synced} synchronized, ${stats.failed} failed, ${stats.remaining} remaining for this path, ${stats.unmatched} for other configured paths, ${stats.legacy} legacy awaiting review`
       )
     )
   );

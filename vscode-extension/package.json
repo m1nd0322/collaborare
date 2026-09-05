@@ -2,12 +2,12 @@
   "name": "collaborare",
   "displayName": "Collaborare",
   "description": "A shared, auditable Copilot Chat participant backed by project Markdown conversations.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "collaborare",
   "license": "SEE LICENSE IN LICENSE.txt",
   "private": true,
   "engines": {
-    "vscode": "^1.95.0"
+    "vscode": "^1.97.0"
   },
   "categories": [
     "Chat"
@@ -29,9 +29,6 @@
     "onCommand:collaborare.checkStatus",
     "onCommand:collaborare.configureAccount",
     "onCommand:collaborare.syncPendingLogs"
-  ],
-  "extensionPack": [
-    "GitHub.copilot-chat"
   ],
   "scripts": {
     "test": "node --test"
@@ -122,7 +119,7 @@
           "default": 500,
           "minimum": 1,
           "maximum": 5000,
-          "description": "Maximum number of Markdown files considered during one recursive knowledge scan."
+          "description": "Maximum Markdown file count for one recursive knowledge scan. Exceeding it blocks the model request."
         },
         "collaborare.maxContextChars": {
           "type": "integer",

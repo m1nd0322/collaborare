@@ -9,6 +9,8 @@ const DEFAULTS = Object.freeze({
   maxTotalBytes: 32 * 1024 * 1024,
 });
 
+const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1']);
+
 const OPTION_NAMES = new Map([
   ['--project', 'project'],
   ['--knowledge-path', 'knowledgePath'],
@@ -29,6 +31,14 @@ function readPositiveInteger(value, label, maximum = Number.MAX_SAFE_INTEGER) {
   }
 
   return Number(value);
+}
+
+function readLoopbackHost(value) {
+  if (typeof value !== 'string' || !LOOPBACK_HOSTS.has(value)) {
+    throw new Error('host must be one of: 127.0.0.1, ::1');
+  }
+
+  return value;
 }
 
 function readEnvironment(env) {
@@ -102,9 +112,7 @@ function parseCliArgs(argv = process.argv.slice(2), env = process.env) {
     throw new Error('Either --project or --knowledge-path is required');
   }
 
-  if (!options.host || !options.host.trim()) {
-    throw new Error('host must not be empty');
-  }
+  options.host = readLoopbackHost(options.host);
 
   return options;
 }
@@ -120,7 +128,7 @@ function formatHelp() {
     'Options:',
     '  --project <path>         Project root (watches <path>/knowledge-database)',
     '  --knowledge-path <path> Explicit knowledge-database path',
-    `  --host <host>            Bind host (default: ${DEFAULTS.host})`,
+    `  --host <host>            Loopback bind host (default: ${DEFAULTS.host})`,
     `  --port <port>            Bind port (default: ${DEFAULTS.port})`,
     `  --interval <ms>          Polling interval (default: ${DEFAULTS.intervalMs})`,
     `  --max-file-bytes <bytes> Per-file limit (default: ${DEFAULTS.maxFileBytes})`,
@@ -138,4 +146,5 @@ module.exports = {
   DEFAULTS,
   formatHelp,
   parseCliArgs,
+  readLoopbackHost,
 };

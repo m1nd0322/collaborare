@@ -23,7 +23,7 @@ test('CLI values override corresponding environment variables', () => {
     [
       '--knowledge-path=Z:\\Explicit\\knowledge-database',
       '--host',
-      'localhost',
+      '127.0.0.1',
       '--port',
       '44000',
       '--interval',
@@ -41,7 +41,7 @@ test('CLI values override corresponding environment variables', () => {
 
   assert.equal(options.project, 'Z:\\FromEnvironment');
   assert.equal(options.knowledgePath, 'Z:\\Explicit\\knowledge-database');
-  assert.equal(options.host, 'localhost');
+  assert.equal(options.host, '127.0.0.1');
   assert.equal(options.port, 44000);
   assert.equal(options.intervalMs, 750);
   assert.equal(options.maxTotalBytes, 4096);
@@ -60,6 +60,27 @@ test('CLI rejects missing roots, unknown options, and invalid numbers', () => {
   assert.throws(
     () => parseCliArgs(['--project', 'Z:\\P', '--interval', '0'], {}),
     /interval must be a positive integer/,
+  );
+});
+
+test('CLI accepts only explicit loopback bind hosts', () => {
+  const ipv6Options = parseCliArgs(
+    ['--project', 'Z:\\P', '--host', '::1'],
+    {},
+  );
+  assert.equal(ipv6Options.host, '::1');
+
+  assert.throws(
+    () => parseCliArgs(['--project', 'Z:\\P', '--host', '0.0.0.0'], {}),
+    /host must be one of: 127\.0\.0\.1, ::1/,
+  );
+  assert.throws(
+    () => parseCliArgs(['--project', 'Z:\\P'], { DASHBOARD_HOST: '192.0.2.10' }),
+    /host must be one of: 127\.0\.0\.1, ::1/,
+  );
+  assert.throws(
+    () => parseCliArgs(['--project', 'Z:\\P', '--host', 'localhost'], {}),
+    /host must be one of: 127\.0\.0\.1, ::1/,
   );
 });
 
