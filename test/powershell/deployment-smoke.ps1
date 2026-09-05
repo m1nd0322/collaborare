@@ -117,6 +117,51 @@ function Add-TestVsixEntries {
     }
 }
 
+function Add-TestVsixEntryWithRawName {
+    param(
+        [Parameter(Mandatory = $true)][string]$Source,
+        [Parameter(Mandatory = $true)][string]$Destination,
+        [Parameter(Mandatory = $true)][string]$EntryName
+    )
+
+    $placeholderName = $EntryName -replace '[<>:"|?*]', '_'
+    if ($placeholderName -ceq $EntryName) {
+        throw "Raw VSIX test entry has no Windows-invalid character: $EntryName"
+    }
+    Add-TestVsixEntries `
+        -Source $Source `
+        -Destination $Destination `
+        -EntryNames @($placeholderName)
+
+    $encoding = [System.Text.UTF8Encoding]::new($false)
+    $placeholderBytes = $encoding.GetBytes($placeholderName)
+    $entryNameBytes = $encoding.GetBytes($EntryName)
+    if ($placeholderBytes.Length -ne $entryNameBytes.Length) {
+        throw "Raw VSIX test entry must preserve its encoded length: $EntryName"
+    }
+
+    $archiveBytes = [System.IO.File]::ReadAllBytes($Destination)
+    [int]$matchCount = 0
+    for ($offset = 0; $offset -le ($archiveBytes.Length - $placeholderBytes.Length); $offset += 1) {
+        $matches = $true
+        for ($index = 0; $index -lt $placeholderBytes.Length; $index += 1) {
+            if ($archiveBytes[$offset + $index] -ne $placeholderBytes[$index]) {
+                $matches = $false
+                break
+            }
+        }
+        if ($matches) {
+            [System.Array]::Copy($entryNameBytes, 0, $archiveBytes, $offset, $entryNameBytes.Length)
+            $matchCount += 1
+            $offset += $placeholderBytes.Length - 1
+        }
+    }
+    if ($matchCount -ne 2) {
+        throw "Raw VSIX test entry expected two ZIP header names; found ${matchCount}: $EntryName"
+    }
+    [System.IO.File]::WriteAllBytes($Destination, $archiveBytes)
+}
+
 function Add-TestVsixEntryWithAttributes {
     param(
         [Parameter(Mandatory = $true)][string]$Source,
@@ -315,10 +360,10 @@ try {
     )
     for ($index = 0; $index -lt $windowsUnsafeNames.Count; $index += 1) {
         $unsafeNameVsix = Join-Path $temporaryRoot "unsafe-windows-name-$index.vsix"
-        Add-TestVsixEntries `
+        Add-TestVsixEntryWithRawName `
             -Source $copilotVsix `
             -Destination $unsafeNameVsix `
-            -EntryNames @($windowsUnsafeNames[$index])
+            -EntryName $windowsUnsafeNames[$index]
         Assert-Throws -Pattern 'Windows-unsafe archive path' -Action {
             Read-VsixMetadata -Path $unsafeNameVsix -Label 'Unsafe Windows name test'
         }

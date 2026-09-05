@@ -23,7 +23,7 @@ function Assert-SafeVsixEntry {
     }
 
     $segments = @($entryName.Split('/'))
-    $isDirectory = [string]::IsNullOrEmpty($Entry.Name)
+    $isDirectory = $entryName.EndsWith('/')
     if ($isDirectory) {
         if (-not $entryName.EndsWith('/') -or $segments.Count -lt 2) {
             throw "$Label VSIX contains an invalid directory entry: $entryName"
@@ -136,7 +136,17 @@ function Read-VsixMetadata {
     $resolvedPath = (Resolve-Path -LiteralPath $Path).ProviderPath
     $archive = [System.IO.Compression.ZipFile]::OpenRead($resolvedPath)
     try {
-        if ($archive.Entries.Count -gt $MaxEntries) {
+        try {
+            $entries = @($archive.get_Entries())
+        }
+        catch {
+            if ($_.Exception.GetBaseException() -is [System.ArgumentException]) {
+                throw "$Label VSIX contains a Windows-unsafe archive path."
+            }
+            throw
+        }
+
+        if ($entries.Count -gt $MaxEntries) {
             throw "$Label VSIX archive entry limit exceeded ($MaxEntries)."
         }
 
@@ -144,7 +154,7 @@ function Read-VsixMetadata {
         $entryKindsByPath = @{}
         $requiredDirectoryPaths = @{}
         [long]$totalBytes = 0
-        foreach ($entry in $archive.Entries) {
+        foreach ($entry in $entries) {
             Assert-SafeVsixEntry -Entry $entry -Label $Label
             $entryKey = $entry.FullName.ToLowerInvariant()
             if ($entriesByName.ContainsKey($entryKey)) {
@@ -152,7 +162,7 @@ function Read-VsixMetadata {
             }
             $entriesByName[$entryKey] = $entry
 
-            $isDirectory = [string]::IsNullOrEmpty($entry.Name)
+            $isDirectory = $entry.FullName.EndsWith('/')
             $canonicalPathKey = $entry.FullName.TrimEnd([char[]]'/').ToLowerInvariant()
             if ($entryKindsByPath.ContainsKey($canonicalPathKey) -or
                 (-not $isDirectory -and $requiredDirectoryPaths.ContainsKey($canonicalPathKey))) {
@@ -177,7 +187,7 @@ function Read-VsixMetadata {
                 throw "$Label VSIX uncompressed size limit exceeded ($MaxTotalBytes bytes)."
             }
 
-            if (-not [string]::IsNullOrEmpty($entry.Name)) {
+            if (-not $isDirectory) {
                 $stream = $entry.Open()
                 try {
                     $buffer = New-Object byte[] 65536
@@ -259,7 +269,7 @@ function Read-VsixMetadata {
             ContainerId = $identity.GetAttribute('Id')
             ContainerPublisher = $identity.GetAttribute('Publisher')
             ContainerVersion = $identity.GetAttribute('Version')
-            EntryNames = @($archive.Entries | ForEach-Object { $_.FullName })
+            EntryNames = @($entries | ForEach-Object { $_.FullName })
             TotalUncompressedBytes = $totalBytes
         }
     }
