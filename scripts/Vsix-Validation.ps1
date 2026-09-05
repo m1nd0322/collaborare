@@ -1,5 +1,6 @@
 #Requires -Version 5.1
 
+Add-Type -AssemblyName System.IO.Compression
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 if (-not [System.IO.Compression.ZipArchiveEntry].GetProperty('ExternalAttributes')) {
     throw 'VSIX validation requires .NET Framework 4.7.2 or newer.'

@@ -154,6 +154,7 @@ try {
         & (Join-Path $repositoryRoot 'scripts/Initialize-Project.ps1') -ProjectPath $linkedProjectPath
     }
 
+    Add-Type -AssemblyName System.IO.Compression
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $copilotSource = Join-Path $temporaryRoot 'copilot-source'
     $copilotExtension = Join-Path $copilotSource 'extension'
