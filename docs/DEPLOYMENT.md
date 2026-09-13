@@ -58,10 +58,13 @@ dashboard\public\styles.css
 dashboard\public\app.js
 docs\DEPLOYMENT.md
 docs\OFFLINE_BOM.md
+docs\OFFLINE_BUNDLE.md
 scripts\Install-Collaborare.ps1
 scripts\Initialize-Project.ps1
 scripts\New-DeploymentManifest.ps1
+scripts\New-OfflineBundle.ps1
 scripts\Start-Dashboard.ps1
+scripts\Test-OfflineBundle.ps1
 scripts\Test-VsixArtifact.ps1
 scripts\Vsix-Validation.ps1
 extensions\<approved Copilot Chat and prerequisite VSIX files>
@@ -71,6 +74,8 @@ manifest\<organization-signed outer manifest>
 ```
 
 `Package-Extension.ps1`은 VSIX checksum과 build info를 만든 뒤 script가 정의한 dashboard·문서·운영 스크립트 payload의 `DEPLOYMENT-SHA256SUMS.txt`도 생성합니다. 기존 release artifact를 포함한 bundle을 다시 준비할 때는 다음 명령으로 재생성합니다.
+
+저장소에는 Collaborare 소유 파일만 포함한 `dist\collaborare-0.1.1-offline-payload.zip`도 제공합니다. 이 ZIP은 직원 VM으로 바로 반입할 수 있는 payload이며 외부 승인 installer와 Copilot VSIX를 포함하지 않습니다. 생성·검증은 [`OFFLINE_BUNDLE.md`](OFFLINE_BUNDLE.md)의 절차를 사용합니다.
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\New-DeploymentManifest.ps1 `

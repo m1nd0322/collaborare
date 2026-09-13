@@ -122,6 +122,12 @@ VS Code 확장만 사용할 VM에는 Node.js가 필요하지 않습니다. Node.
 
 ## 설치
 
+### Windows 오프라인 payload
+
+`dist/collaborare-0.1.1-offline-payload.zip`과 `dist/OFFLINE-BUNDLE-SHA256SUMS.txt`를 사용하면 Collaborare 소유 설치 payload를 한 파일로 반입할 수 있습니다. 생성·검증 명령과 Windows VM 설치 순서는 [`docs/OFFLINE_BUNDLE.md`](docs/OFFLINE_BUNDLE.md)를 따르십시오.
+
+이 payload에는 조직별 승인과 라이선스가 필요한 VS Code, Copilot Chat dependency VSIX, Node.js, Chrome Enterprise, 회사 CA를 포함하지 않습니다. 해당 파일은 승인된 별도 배포 채널에서 반입하고 outer manifest로 전체 bundle을 검증해야 합니다. 완전 air-gap에서는 Copilot 모델 응답이 지원되지 않습니다.
+
 ### 1. 소스 받기
 
 ```powershell

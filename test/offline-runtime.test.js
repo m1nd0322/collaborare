@@ -55,7 +55,9 @@ test('VM runtime scripts do not invoke package managers or remote download tools
     read('scripts/Initialize-Project.ps1'),
     read('scripts/Install-Collaborare.ps1'),
     read('scripts/New-DeploymentManifest.ps1'),
+    read('scripts/New-OfflineBundle.ps1'),
     read('scripts/Start-Dashboard.ps1'),
+    read('scripts/Test-OfflineBundle.ps1'),
     read('scripts/Test-VsixArtifact.ps1'),
     read('scripts/Vsix-Validation.ps1'),
   ].join('\n');

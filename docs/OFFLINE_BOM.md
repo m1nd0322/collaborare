@@ -62,12 +62,15 @@ collaborare-offline-bundle\
   docs\
     DEPLOYMENT.md
     OFFLINE_BOM.md
+    OFFLINE_BUNDLE.md
     vendor\<approved GitHub allowlist and proxy snapshots>
   scripts\
     Initialize-Project.ps1
     Install-Collaborare.ps1
     New-DeploymentManifest.ps1
+    New-OfflineBundle.ps1
     Start-Dashboard.ps1
+    Test-OfflineBundle.ps1
     Test-VsixArtifact.ps1
     Vsix-Validation.ps1
   manifest\

@@ -33,6 +33,12 @@ jobs:
             -ExpectedCollaborareVersion "0.1.1" `
             -ExpectedNodeVersion "22.23.2" `
             -Verify
+          .\scripts\Test-OfflineBundle.ps1 `
+            -BundlePath ".\dist\collaborare-0.1.1-offline-payload.zip" `
+            -TrustedPayloadManifestPath ".\dist\DEPLOYMENT-SHA256SUMS.txt" `
+            -ExpectedCollaborareVersion "0.1.1" `
+            -ExpectedNodeVersion "22.23.2" `
+            -ChecksumPath ".\dist\OFFLINE-BUNDLE-SHA256SUMS.txt"
           .\test\powershell\deployment-smoke.ps1
       - name: Rebuild and verify VSIX source payload
         shell: powershell

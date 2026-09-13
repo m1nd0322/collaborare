@@ -659,6 +659,45 @@ Copy-Item -LiteralPath '$escapedVsix' -Destination `$Arguments[`$outIndex + 1] -
             -ExpectedNodeVersion '22.23.2' `
             -OutputPath (Join-Path $repositoryRoot 'README.md')
     }
+
+    $offlineBuilder = Join-Path $repositoryRoot 'scripts/New-OfflineBundle.ps1'
+    $offlineVerifier = Join-Path $repositoryRoot 'scripts/Test-OfflineBundle.ps1'
+    $firstBundleDirectory = Join-Path $temporaryRoot 'offline-payload-one'
+    $secondBundleDirectory = Join-Path $temporaryRoot 'offline-payload-two'
+    New-Item -ItemType Directory -Path $firstBundleDirectory, $secondBundleDirectory -Force | Out-Null
+    $firstBundlePath = Join-Path $firstBundleDirectory 'collaborare-0.1.1-offline-payload.zip'
+    $secondBundlePath = Join-Path $secondBundleDirectory 'collaborare-0.1.1-offline-payload.zip'
+    & $offlineBuilder `
+        -RepositoryRoot $repositoryRoot `
+        -ExpectedCollaborareVersion '0.1.1' `
+        -ExpectedNodeVersion '22.23.2' `
+        -OutputPath $firstBundlePath
+    & $offlineBuilder `
+        -RepositoryRoot $repositoryRoot `
+        -ExpectedCollaborareVersion '0.1.1' `
+        -ExpectedNodeVersion '22.23.2' `
+        -OutputPath $secondBundlePath
+    & $offlineVerifier `
+        -BundlePath $firstBundlePath `
+        -TrustedPayloadManifestPath (Join-Path $repositoryRoot 'dist/DEPLOYMENT-SHA256SUMS.txt') `
+        -ExpectedCollaborareVersion '0.1.1' `
+        -ExpectedNodeVersion '22.23.2' `
+        -ChecksumPath (Join-Path $firstBundleDirectory 'OFFLINE-BUNDLE-SHA256SUMS.txt')
+    $firstChecksumPath = Join-Path $firstBundleDirectory 'OFFLINE-BUNDLE-SHA256SUMS.txt'
+    $firstChecksum = Get-Content -LiteralPath $firstChecksumPath -Raw
+    Write-Utf8WithoutBom -Path $firstChecksumPath -Contents "0$firstChecksum"
+    Assert-Throws -Pattern 'checksum sidecar' -Action {
+        & $offlineVerifier `
+            -BundlePath $firstBundlePath `
+            -TrustedPayloadManifestPath (Join-Path $repositoryRoot 'dist/DEPLOYMENT-SHA256SUMS.txt') `
+            -ExpectedCollaborareVersion '0.1.1' `
+            -ExpectedNodeVersion '22.23.2' `
+            -ChecksumPath $firstChecksumPath
+    }
+    Write-Utf8WithoutBom -Path $firstChecksumPath -Contents $firstChecksum
+    Assert-True `
+        -Condition ((Get-FileHash -LiteralPath $firstBundlePath -Algorithm SHA256).Hash -eq (Get-FileHash -LiteralPath $secondBundlePath -Algorithm SHA256).Hash) `
+        -Message 'Offline payload bundle generation was not deterministic.'
 }
 finally {
     Remove-Item -LiteralPath $temporaryRoot -Recurse -Force -ErrorAction SilentlyContinue
