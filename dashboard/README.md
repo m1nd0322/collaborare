@@ -165,6 +165,8 @@ API와 SSE에는 knowledge 폴더의 절대 경로를 넣지 않습니다. 파�
 - heading, list, quote, inline code, bold, code fence의 최소 Markdown 표시
 - desktop/mobile 반응형 이중 채널 타임라인
 
+SSE `upsert`·`delete`가 짧은 시간에 연속으로 도착하면 UI는 각 이벤트마다 전체 목록을 다시 그리지 않습니다. 변경을 100ms debounce timer로 모아 한 번 렌더링하고, 변경이 계속되는 경우에는 250ms max-wait timer를 사용합니다. 브라우저 scheduling에 따라 실제 실행 시점은 늦어질 수 있습니다. 신규 항목 강조 만료도 같은 예약 갱신 경로를 사용합니다. 연결이 교체된 뒤 이전 `EventSource`가 늦게 보낸 `upsert`·`delete`·`error`는 현재 화면에 반영하지 않습니다.
+
 사용자 Markdown은 HTML 문자열로 삽입하지 않습니다. UI는 DOM node를 만들고 `textContent`를 사용하므로 `<script>` 같은 입력도 문자 그대로 표시됩니다. 서버는 CSP와 `nosniff`, frame 차단 헤더를 함께 보냅니다.
 
 ## Security Notes
@@ -193,6 +195,14 @@ node --test test/scanner.test.js
 
 테스트용 파일은 `test/.tmp/` 아래에서 만들고 각 테스트 종료 시 제거합니다. HTTP/SSE 테스트는 임의 port를 사용하고 server, timer, SSE client를 명시적으로 닫습니다.
 
+브라우저 UI와 서버 lifecycle 회귀를 따로 실행하려면 다음 명령을 사용합니다.
+
+```powershell
+node --test test/app.test.js test/server.test.js
+```
+
+브라우저 회귀는 100건의 연속 mutation을 한 번 렌더링으로 묶는지, 지속 stream이 최대 대기 시간을 넘기지 않는지, 신규 항목 만료와 stale `EventSource` 이벤트를 처리하는지 확인합니다. lifecycle 회귀는 초기 scan 중 `close()`가 완료를 기다리는지, 종료 중 `start()`를 거부하는지, 종료 후 재시작이 listener·timer를 남기지 않는지 확인합니다.
+
 ## Troubleshooting
 
 ### `Z:` 드라이브를 찾지 못하는 경우
@@ -219,4 +229,4 @@ node server.js --project "Z:\ProjectName" --interval 1000
 node server.js --project "Z:\ProjectName" --port 43111
 ```
 
-종료할 때는 `Ctrl+C`를 사용합니다. 서버는 polling timer와 모든 SSE client를 정리한 뒤 HTTP listener를 닫습니다.
+종료할 때는 `Ctrl+C`를 사용합니다. 서버는 초기 scan이 진행 중이면 완료 또는 실패를 기다린 뒤 polling timer, 모든 SSE client, scanner를 정리하고 HTTP listener를 닫습니다. 종료가 진행되는 동안 새 `start()`는 거부하며, 종료가 끝나면 같은 server instance를 다시 시작할 수 있습니다.

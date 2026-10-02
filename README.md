@@ -54,7 +54,7 @@ Z:\ProjectName\knowledge-database\conversations\
 5. 선택한 Markdown을 untrusted reference로 격리하고 현재 Chat 이력과 함께 사용자가 선택한 Copilot 모델에 전달합니다.
 6. Copilot 응답을 Chat에 스트리밍합니다.
 7. 질문, 응답, 계정 귀속 정보, VM 이름, 시각, 모델, 상태를 UUID Markdown으로 게시합니다.
-8. 대시보드는 polling으로 변경을 감지하고 Chrome에 SSE `upsert` 또는 `delete` 이벤트를 전송합니다.
+8. 대시보드는 polling으로 변경을 감지하고 Chrome에 SSE `upsert` 또는 `delete` 이벤트를 전송합니다. Chrome UI는 짧은 시간에 몰린 변경을 100ms debounce timer로 한 번에 반영하고, 변경이 계속되면 250ms max-wait timer로 갱신합니다. 실제 실행 시점은 브라우저 scheduling의 영향을 받을 수 있습니다.
 
 읽기·경로 오류, knowledge 경로 누락, 프로젝트 경계 이탈, 전체 byte 상한 초과, Markdown 파일 수 상한 초과가 발생하면 모델을 호출하지 않습니다. `maxFileBytes`를 초과한 개별 파일만 검색 대상에서 제외하고 나머지 문서로 요청을 계속합니다.
 
@@ -565,7 +565,7 @@ VM A와 VM B가 같은 `Z:\ProjectName`을 사용하면 별도 애플리케이�
 
 1. VM A가 `@collaborare`로 질문하고 UUID Markdown을 저장합니다.
 2. VM B의 다음 `@collaborare` 요청은 관련성이 있으면 VM A의 기록을 문맥으로 선택합니다.
-3. 각 VM의 대시보드는 같은 파일을 polling하므로 최대 polling 간격만큼 지난 뒤 동일한 타임라인을 표시합니다.
+3. 각 VM의 대시보드는 polling scan이 끝난 뒤 SSE로 변경을 받고, 100ms debounce와 250ms max-wait 예약 갱신으로 화면에 반영합니다. 실제 지연은 polling 간격, scan·전송 시간, 브라우저 부하와 scheduling에 따라 달라집니다.
 
 운영 권장사항:
 
@@ -575,7 +575,7 @@ VM A와 VM B가 같은 `Z:\ProjectName`을 사용하면 별도 애플리케이�
 - 프로젝트 참여자에게만 knowledge 폴더 ACL을 부여합니다.
 - SMB 공유가 같은 디렉터리의 hard-link create-if-absent와 publication-temp unlink를 지원하는지 수용시험에서 확인합니다.
 - 파일 수가 증가하면 보존 기간과 archive 정책을 먼저 적용합니다.
-- 기본 polling 2초가 공유 스토리지에 부담을 주면 간격을 늘립니다.
+- 기본 polling 2초가 공유 스토리지에 부담을 주면 간격을 늘립니다. polling 간격은 공유 파일 변경을 감지하는 시간이고, Chrome은 수신한 여러 `upsert`·`delete`를 묶어 100ms debounce와 250ms max-wait timer로 렌더링합니다.
 
 ## 문제 해결
 
@@ -701,6 +701,9 @@ npm run test:integration
 - knowledge 검색·크기 제한·경로 경계 검증
 - local pending queue 내구성·동시성·멱등성·명시적 legacy migration
 - dashboard scanner diff·SSE·HTTP 보안 header·DNS rebinding 방어
+- dashboard 브라우저 harness 자동 회귀: SSE mutation batching, 지속 stream max-wait, 신규 항목 만료, stale `EventSource` 이벤트
+- 별도로 실행한 실제 Chromium smoke: SSE `upsert`·`delete`, 검색·정렬, JavaScript 오류 0건. 100개 burst에서 전체 화면 갱신이 100회에서 1회로 줄어드는 것도 로컬에서 측정
+- dashboard 시작 중 종료, 종료 중 재시작 차단, 종료 완료 후 재시작 lifecycle 회귀
 - runtime package·browser asset·script의 offline network invariant
 - VSIX source byte·Windows-safe archive path·container identity·재귀 dependency closure·exact-version 설치·배포 manifest smoke
 
@@ -712,7 +715,16 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\test\powershell\deploy
 
 `npm test`는 현재 Node.js runtime에서 JavaScript suite와 offline runtime invariant를 실행합니다. `.github/workflows/verify.yml`은 Node.js 22와 Windows PowerShell 5.1에서 committed artifact 검증, 배포 smoke, 재패키징을 반복합니다.
 
-실제 배포 전에는 Windows PowerShell 5.1, 회사 VS Code/Copilot Enterprise, 실제 `Z:` SMB 공유, Chrome 정책 환경에서 [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)의 수용시험을 수행하십시오.
+2026-10-03 기준 추가 검증 기록:
+
+| 환경 | 결과 |
+| --- | --- |
+| Node.js 22.23.2 | 149/149 테스트 통과 |
+| Node.js 24.14.1 | 149/149 테스트 통과 |
+| 별도 실제 Chromium smoke | SSE `upsert`·`delete`, 검색·정렬 통과, JavaScript 오류 0건, 100개 burst 전체 화면 갱신 100회 → 1회 |
+| macOS PowerShell 7.6.6 | deployment smoke, VSIX byte 검증, manifest 검증, offline payload ZIP checksum 통과 |
+
+위 기록은 해당 환경에서 실행한 검증 결과입니다. 실제 Windows PowerShell 5.1, 조직의 VS Code/Copilot Enterprise 설치, 실제 `Z:` SMB 공유와 Chrome 정책 환경은 이 기록에 포함하지 않았으므로, 배포 전 [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)의 수용시험을 수행하십시오.
 
 ## 라이선스
 

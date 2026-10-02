@@ -1,1 +1,1 @@
-10e80d84e0bef116924151b433b8ec866ff4fcd70ca59693c923fcab38688079  collaborare-0.1.1-offline-payload.zip
+292745b3faf51423751ad87e34eade7c074782639b4f1ea67e9de6f9ce4b9a18  collaborare-0.1.1-offline-payload.zip

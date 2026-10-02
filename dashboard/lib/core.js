@@ -263,6 +263,7 @@ function createDashboardServer(inputOptions = {}) {
   let startedAt = null;
   let startPromise = null;
   let closePromise = null;
+  let closing = false;
 
   function publicMetadata() {
     return {
@@ -527,6 +528,9 @@ function createDashboardServer(inputOptions = {}) {
   });
 
   async function start() {
+    if (closing) {
+      throw new Error('Dashboard server is shutting down');
+    }
     if (server.listening) {
       return server.address();
     }
@@ -554,6 +558,10 @@ function createDashboardServer(inputOptions = {}) {
         scanner.boundaryIdentity = projectIdentity;
       }
       await scanner.scanNow();
+
+      if (closing) {
+        throw new Error('Dashboard server startup cancelled during shutdown');
+      }
 
       await new Promise((resolve, reject) => {
         function onError(error) {
@@ -591,7 +599,12 @@ function createDashboardServer(inputOptions = {}) {
       return closePromise;
     }
 
+    closing = true;
     closePromise = (async () => {
+      if (startPromise) {
+        await startPromise.catch(() => {});
+      }
+
       if (heartbeatTimer) {
         clearInterval(heartbeatTimer);
         heartbeatTimer = null;
@@ -621,7 +634,10 @@ function createDashboardServer(inputOptions = {}) {
           server.closeIdleConnections?.();
         });
       }
-    })();
+    })().finally(() => {
+      closePromise = null;
+      closing = false;
+    });
 
     return closePromise;
   }

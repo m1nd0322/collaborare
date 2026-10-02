@@ -32,6 +32,7 @@ const state = {
   noticeTimer: null,
   reconnectAttempt: 0,
   reconnectTimer: null,
+  renderMaxTimer: null,
   renderTimer: null,
   revision: 0,
   serverRevision: 0,
@@ -382,6 +383,10 @@ function searchableText(item) {
 }
 
 function render() {
+  window.clearTimeout(state.renderTimer);
+  window.clearTimeout(state.renderMaxTimer);
+  state.renderTimer = null;
+  state.renderMaxTimer = null;
   const allItems = [...state.items.values()];
   updateSelectOptions(elements.accountFilter, countedValues(allItems, 'account'), '전체 계정');
   updateSelectOptions(elements.statusFilter, countedValues(allItems, 'status'), '전체 상태');
@@ -419,6 +424,9 @@ function render() {
 function scheduleRender() {
   window.clearTimeout(state.renderTimer);
   state.renderTimer = window.setTimeout(render, 100);
+  if (state.renderMaxTimer === null) {
+    state.renderMaxTimer = window.setTimeout(render, 250);
+  }
 }
 
 function markNew(relativePath) {
@@ -427,7 +435,7 @@ function markNew(relativePath) {
   window.setTimeout(() => {
     if ((state.newUntil.get(relativePath) || 0) <= Date.now()) {
       state.newUntil.delete(relativePath);
-      render();
+      scheduleRender();
     }
   }, 8050);
 }
@@ -455,7 +463,7 @@ function applyMutation(type, payload, shouldRender = true) {
   state.serverRevision = Math.max(state.serverRevision, eventRevision);
   state.lastUpdatedAt = new Date().toISOString();
   if (shouldRender) {
-    render();
+    scheduleRender();
   }
 }
 
@@ -610,6 +618,9 @@ function connectEvents() {
   });
 
   eventSource.addEventListener('upsert', (event) => {
+    if (state.eventSource !== eventSource) {
+      return;
+    }
     const payload = parseEventData(event);
     if (payload) {
       receiveMutation('upsert', payload);
@@ -617,6 +628,9 @@ function connectEvents() {
   });
 
   eventSource.addEventListener('delete', (event) => {
+    if (state.eventSource !== eventSource) {
+      return;
+    }
     const payload = parseEventData(event);
     if (payload) {
       receiveMutation('delete', payload);
@@ -644,6 +658,9 @@ function connectEvents() {
   });
 
   eventSource.addEventListener('error', (event) => {
+    if (state.eventSource !== eventSource) {
+      return;
+    }
     if (typeof event.data === 'string' && event.data) {
       const payload = parseEventData(event);
       if (payload) {
@@ -652,9 +669,6 @@ function connectEvents() {
       return;
     }
 
-    if (state.eventSource !== eventSource) {
-      return;
-    }
     eventSource.close();
     state.eventSource = null;
     setConnection(navigator.onLine ? 'retrying' : 'offline', navigator.onLine ? '연결 끊김' : '네트워크 오프라인');
